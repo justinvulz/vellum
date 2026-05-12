@@ -1,0 +1,17 @@
+[package]
+name = "vellum"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.27"
+walkdir = "2"
+notify = "6"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+regex = "1"
+dirs = "5"
+image = { version = "0.24", default-features = false }
+pdfium-render = "0.8"
