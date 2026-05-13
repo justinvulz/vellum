@@ -100,6 +100,11 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 | `anyhow`        | Error handling                               |
 | `serde/toml`    | Config file parsing                          |
 
+## File Struct under ~/vellum
+~/vellum/asset - contain image use in note and typst tempelet
+~/vellum/note - note
+
+
 ## Future Work
 
 - Tantivy full-text index (blocked on zstd dependency conflict)

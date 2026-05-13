@@ -38,6 +38,7 @@ pub struct App {
     pub backlinks: BacklinkIndex,
     pub layout: LayoutMode,
     pub tab_focus: TabFocus,
+    pub sidebar_open: bool,
     pub watcher: Option<FileWatcher>,
     pub git: GitSync,
     pub status: String,
@@ -57,6 +58,7 @@ impl App {
             backlinks,
             layout: LayoutMode::Split,
             tab_focus: TabFocus::Editor,
+            sidebar_open: true,
             watcher,
             git: GitSync::default(),
             status: String::new(),
@@ -199,6 +201,11 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
+                let icon = if self.sidebar_open { "◀" } else { "▶" };
+                if ui.button(icon).clicked() {
+                    self.sidebar_open = !self.sidebar_open;
+                }
+                ui.separator();
                 ui.selectable_value(&mut self.layout, LayoutMode::Split, "Split");
                 ui.selectable_value(&mut self.layout, LayoutMode::Tab, "Tabs");
                 ui.separator();
@@ -219,7 +226,8 @@ impl eframe::App for App {
 
         egui::SidePanel::left("vault")
             .default_width(240.0)
-            .show(ctx, |ui| {
+            .width_range(24.0..=600.0)
+            .show_animated(ctx, self.sidebar_open, |ui| {
                 if let Some(a) = ui::vault_explorer::show(self, ui) {
                     actions.push(a);
                 }

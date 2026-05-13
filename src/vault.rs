@@ -3,6 +3,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+const TYPST_TOML: &str = "[package]\nname = \"vellum-notes\"\nversion = \"0.1.0\"\n";
+
+const DEFAULT_THEME: &str = r##"// Vellum theme — edit to customize
+#let template(doc) = {
+  set page(fill: rgb("#1b1b1b"), margin: 2cm)
+  set text(fill: rgb("#d4d4d4"))
+  doc
+}
+"##;
+
+const NOTE_BOILERPLATE: &str = "#import \"/asset/theme.typ\": template\n#show: template\n\n";
+
 pub struct Vault {
     pub root: PathBuf,
     pub notes: Vec<PathBuf>,
@@ -10,9 +22,19 @@ pub struct Vault {
 
 impl Vault {
     pub fn open_or_init(root: PathBuf) -> Result<Self> {
-        if !root.exists() {
-            fs::create_dir_all(&root)
-                .with_context(|| format!("creating vault at {}", root.display()))?;
+        fs::create_dir_all(root.join("note"))
+            .with_context(|| format!("creating vault/note at {}", root.display()))?;
+        fs::create_dir_all(root.join("asset"))
+            .with_context(|| format!("creating vault/asset at {}", root.display()))?;
+        let manifest = root.join("typst.toml");
+        if !manifest.exists() {
+            fs::write(&manifest, TYPST_TOML)
+                .with_context(|| "writing typst.toml")?;
+        }
+        let theme_path = root.join("asset").join("theme.typ");
+        if !theme_path.exists() {
+            fs::write(&theme_path, DEFAULT_THEME)
+                .with_context(|| "writing default theme template")?;
         }
         let mut vault = Self {
             root,
@@ -23,7 +45,8 @@ impl Vault {
     }
 
     pub fn rescan(&mut self) {
-        self.notes = WalkDir::new(&self.root)
+        let notes_dir = self.root.join("note");
+        self.notes = WalkDir::new(&notes_dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
@@ -47,12 +70,12 @@ impl Vault {
     }
 
     pub fn create_note(&mut self, name: &str) -> Result<PathBuf> {
-        let mut path = self.root.join(name);
+        let mut path = self.root.join("note").join(name);
         if path.extension().and_then(|s| s.to_str()) != Some("typ") {
             path.set_extension("typ");
         }
         if !path.exists() {
-            self.write_note(&path, "")?;
+            self.write_note(&path, NOTE_BOILERPLATE)?;
         }
         self.rescan();
         Ok(path)

@@ -4,24 +4,38 @@ use crate::search;
 pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
     let mut action = None;
 
-    ui.heading("Vellum");
-    ui.label(app.vault.root.display().to_string());
+    ui.add(egui::Label::new(egui::RichText::new("Vellum").heading()).truncate(true));
+    ui.add(egui::Label::new(app.vault.root.display().to_string()).truncate(true));
     ui.separator();
 
-    ui.horizontal(|ui| {
-        let resp = ui.text_edit_singleline(&mut app.new_note_name);
-        if (ui.button("New").clicked()
-            || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
-            && !app.new_note_name.trim().is_empty()
+    let narrow = ui.available_width() < 140.0;
+    let mut submit = false;
+    let resp = ui.add(
+        egui::TextEdit::singleline(&mut app.new_note_name)
+            .hint_text("new note…")
+            .desired_width(f32::INFINITY),
+    );
+    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        submit = true;
+    }
+    if narrow {
+        if ui.add(egui::Button::new("New").min_size(egui::vec2(ui.available_width(), 0.0)))
+            .clicked()
         {
-            action = Some(AppAction::CreateNote(app.new_note_name.trim().to_string()));
-            app.new_note_name.clear();
+            submit = true;
         }
-    });
+    } else if ui.button("New").clicked() {
+        submit = true;
+    }
+    if submit && !app.new_note_name.trim().is_empty() {
+        action = Some(AppAction::CreateNote(app.new_note_name.trim().to_string()));
+        app.new_note_name.clear();
+    }
 
     ui.add_space(4.0);
-    ui.label("Search");
-    ui.text_edit_singleline(&mut app.search_query);
+    ui.add(egui::TextEdit::singleline(&mut app.search_query)
+        .hint_text("search…")
+        .desired_width(f32::INFINITY));
 
     ui.separator();
     egui::ScrollArea::vertical()
