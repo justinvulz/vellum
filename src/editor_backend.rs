@@ -82,9 +82,17 @@ impl FileWatcher {
         while let Ok(res) = self.rx.try_recv() {
             if let Ok(event) = res {
                 for path in event.paths {
-                    if path.extension().and_then(|s| s.to_str()) == Some("typ") {
-                        changed.push(path);
+                    if path.extension().and_then(|s| s.to_str()) != Some("typ") {
+                        continue;
                     }
+                    // Ignore writes inside our snippet cache.
+                    if path
+                        .components()
+                        .any(|c| c.as_os_str() == ".vellum-snippets")
+                    {
+                        continue;
+                    }
+                    changed.push(path);
                 }
             }
         }

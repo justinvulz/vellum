@@ -1,33 +1,64 @@
 # Vellum — Specification
 
-Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ`) documents stored in a local vault directory and previewed as rendered PDFs inside the app. Real editing is done in Helix, launched as an external process.
+Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ`) documents stored in a local vault directory. The app provides a mixed inline editor where plain text is edited directly and Typst blocks (math, tables, lists, code) are rendered in-process and editable on click.
 
 ---
 
 ## Goals
 
 - Store notes as plain `.typ` files (human-readable, git-friendly)
-- Live PDF preview compiled from Typst source
+- Mixed inline editing: plain prose editable directly, Typst blocks rendered live
 - Obsidian-style `[[wiki-links]]` and backlink tracking
 - Minimal UI — egui, no Electron, no browser
-- Helix as the editor; the app is a launcher + preview shell
+- Helix as optional external editor; the app is self-sufficient for basic editing
 
 ---
 
 ## Vault
 
 - Default location: `~/vellum/`
-- Recursively scans for `.typ` files on start and after any file change
+- Subdirectory structure:
+  - `~/vellum/note/` — all `.typ` note files
+  - `~/vellum/asset/` — images, theme template, and other shared assets
+  - `~/vellum/typst.toml` — Typst package manifest for LSP root resolution
+- `asset/theme.typ` is auto-generated on first run (dark theme template)
+- Recursively scans `note/` for `.typ` files on start and after any file change
 - CRUD: create, read, write, delete, rename notes
 - `display_name` strips the vault root prefix for display
 - `default_vault_dir()` falls back to `./vellum` if home dir is unavailable
 
-## Editor
+## Mixed Inline Editor
 
-- Plain egui `TextEdit` buffer for lightweight in-app editing
-- `Ctrl+S` saves and triggers recompile
-- `Ctrl+E` opens the current note in Helix (external)
-- File-watcher detects external writes and auto-reloads (if buffer is clean)
+The core editing experience is a segment-based mixed editor (`MixedEditor`):
+
+### Segment Classification
+
+Source is split on blank lines into paragraphs. Each paragraph is classified as:
+- **`Typst`**: contains `#` or `$`, or starts with `=` / `-` / `+` / `/`
+- **`Plain`**: everything else
+
+### Editing Behavior
+
+- **Plain segments**: rendered as inline `egui::TextEdit` — edit directly in place
+- **Typst segments (idle)**: rendered as an image via in-process Typst compilation; click to edit
+- **Typst segments (editing)**: shown as a `code_editor` `TextEdit`; focus loss re-parses and re-renders
+- **Compile error**: shows error message + raw source text; click to edit
+
+### Preamble Propagation
+
+The first N contiguous Typst segments containing only `#let` / `#import` / `#set` / `#show` / blank / comment lines are the "preamble". The preamble is prepended to every subsequent Typst segment before compilation so that variable bindings and imports are visible across all blocks in the note.
+
+### Render Cache
+
+Rendered textures are cached by *effective source* (preamble + block body). Failed compiles are cached to avoid retrying every frame. The cache is content-addressed, so unchanged blocks survive note reloads.
+
+## Typst Engine
+
+- In-process compilation using the `typst` crate (0.14)
+- Each snippet is wrapped: `#import "/asset/theme.typ": template\n#show: template\n\n{snippet}`
+- Fonts: bundled via `typst-assets` (includes New Computer Modern Math) + system fonts via `fontdb`
+- Rendered to `egui::TextureHandle` via `typst-render` at 2× pixel density
+- `comemo::evict(0)` flushes memoization between renders
 
 ## External Editor (Helix)
 
@@ -35,17 +66,7 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 - Terminal priority: `alacritty → kitty → foot → wezterm → ghostty → gnome-terminal → konsole → xterm`
 - Override with `$TERMINAL` env var
 - Buffer is saved before Helix launches
-- File-watcher reloads buffer after Helix writes
-
-## Typst Preview
-
-- Pipeline: Typst CLI → PDF → pdfium rasterization → egui textures
-- `typst compile --root <vault> <source> <tmp>.pdf`
-- pdfium rasterizes each page at `target_width = 2400px`
-- Pages stored as `egui::TextureHandle`; rendered in a scroll area
-- On compile error: shows error message + raw source fallback
-- "Open PDF" button launches the PDF in the system viewer (`xdg-open`)
-- pdfium requires `PDFIUM_DYNAMIC_LIB_PATH` pointing to `libpdfium.so` (set by Nix dev shell)
+- File-watcher reloads buffer after Helix writes (only if buffer is clean)
 
 ## Search
 
@@ -61,20 +82,21 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 ## UI Layout
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Split | Tabs          [mode]         [status] [●]  │  ← topbar
-├──────────┬──────────────────────────┬───────────────┤
-│  Vault   │                          │               │
-│  Search  │    TextEdit (editor)     │  PDF Preview  │
-│  ──────  │    [Save] [Helix] [Rel.] │  [Helix][PDF] │
-│  Notes   │                          │               │
-│          ├──────────────────────────┤               │
-│          │   Backlinks panel        │               │
-└──────────┴──────────────────────────┴───────────────┘
+┌──────────────────────────────────────────────┐
+│  [sidebar toggle]              [status]       │  ← topbar
+├──────────┬───────────────────────────────────┤
+│  Vault   │                                   │
+│  Search  │    MixedEditor                    │
+│  ──────  │    Plain segments: inline TextEdit │
+│  Notes   │    Typst segments: rendered image  │
+│          │      └─ click → source TextEdit    │
+│          ├───────────────────────────────────┤
+│          │   Backlinks panel                 │
+└──────────┴───────────────────────────────────┘
 ```
 
-- **Split mode**: sidebar + editor + preview + backlinks (default)
-- **Tab mode**: sidebar + toggle between editor and preview
+- Left sidebar is foldable (animated); shows vault tree + search
+- Backlinks panel appears below the editor for the currently open note
 
 ## Key Shortcuts
 
@@ -89,21 +111,20 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 
 ## Dependencies
 
-| Crate           | Purpose                                      |
-|-----------------|----------------------------------------------|
-| `eframe/egui`   | GUI framework                                |
-| `walkdir`       | Recursive vault directory scan               |
-| `notify`        | File-system watcher for external edits       |
-| `pdfium-render` | In-process PDF rasterization                 |
-| `regex`         | Wiki-link extraction and content search      |
-| `dirs`          | Resolve `~/vellum` vault path                |
-| `anyhow`        | Error handling                               |
-| `serde/toml`    | Config file parsing                          |
-
-## File Struct under ~/vellum
-~/vellum/asset - contain image use in note and typst tempelet
-~/vellum/note - note
-
+| Crate              | Purpose                                          |
+|--------------------|--------------------------------------------------|
+| `eframe/egui`      | GUI framework                                    |
+| `walkdir`          | Recursive vault directory scan                   |
+| `notify`           | File-system watcher for external edits           |
+| `typst`            | In-process Typst compilation                     |
+| `typst-render`     | Rasterize compiled Typst pages to pixel data     |
+| `typst-assets`     | Bundled fonts (incl. New Computer Modern Math)   |
+| `fontdb`           | System font discovery                            |
+| `comemo`           | Memoization cache management for Typst           |
+| `regex`            | Wiki-link extraction and content search          |
+| `dirs`             | Resolve `~/vellum` vault path                    |
+| `anyhow`           | Error handling                                   |
+| `serde/toml`       | Config file parsing                              |
 
 ## Future Work
 
@@ -112,3 +133,4 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 - `[[link]]` click-to-navigate in the editor
 - Note rename propagates `[[links]]` across vault
 - Config UI for vault path, terminal, Helix theme
+- Syntax highlighting in Typst source `TextEdit` blocks

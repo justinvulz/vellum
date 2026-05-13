@@ -86,6 +86,5 @@
   // show math.equation.where(block: false): box
 
 
-  [ \ \ ]
   doc
 }

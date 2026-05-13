@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Vellum is a desktop note-taking app inspired by Obsidian, built in Rust with egui. Notes are Typst (`.typ`) documents stored in a local vault (`~/vellum`) and optionally synced via Git. Helix is used as the external editor, launched as a subprocess.
+Vellum is a desktop note-taking app inspired by Obsidian, built in Rust with egui. Notes are Typst (`.typ`) documents stored in a local vault (`~/vellum`). The app provides a mixed inline editor: plain text paragraphs are editable directly, while Typst blocks (math, tables, lists, etc.) are rendered in-process and flip to source-editing on click. Helix can be launched as an external editor.
 
 ## Dev Environment
 
@@ -32,28 +32,71 @@ WINIT_UNIX_BACKEND=x11 cargo run
 ## Architecture
 
 - **`app`** — main `App` struct, egui event loop, top-level state, coordinates all other modules
-- **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`
+- **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; subdirs: `note/`, `asset/`
+- **`segment`** — paragraph-based parser splitting source into `Plain` and `Typst` segments
+- **`mixed_editor`** — mixed inline editor: Plain segments use `TextEdit`, Typst segments render via `TypstEngine` and flip to source-edit on click
+- **`typst_engine`** — in-process Typst 0.14 compiler; implements `typst::World`; bundles fonts via `typst-assets`
 - **`editor_backend`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`; `FileWatcher` detects external changes and triggers reload
-- **`helix_editor`** — plain egui `TextEdit` buffer wrapper (`HelixEditor`); no modal keymap
-- **`typst_compiler`** — Typst CLI compile → PDF → pdfium rasterization pipeline; pages stored as egui `TextureHandle`
+- **`helix_editor`** — plain egui `TextEdit` buffer wrapper (`HelixEditor`); kept for fallback/external-edit buffer tracking
 - **`search`** — filename and content search; parses `[[wiki-links]]` for backlinks
 - **`git`** — optional Git sync (auto-commit, push/pull)
-- **`ui/`** — egui panels: vault explorer, editor view, preview pane, backlinks panel
+- **`ui/`** — egui panels: vault explorer, editor view, backlinks panel
 
 ### Data Flow
 
-1. Vault scan loads `.typ` files into file tree
-2. Selecting a note loads its contents into the editor buffer
-3. Save (`Ctrl+S`) or external Helix edit (detected via file-watcher) triggers Typst recompile
-4. Typst CLI produces a PDF; pdfium rasterizes it at `target_width=2400px` into egui textures
-5. Backlinks updated by scanning all notes for `[[note-name]]` references
+1. Vault scan loads `.typ` files from `~/vellum/note/` into the sidebar file tree
+2. Selecting a note loads its contents into `MixedEditor` via `load(&source)`
+3. `MixedEditor` parses the source into `Plain`/`Typst` segments
+4. Typst segments are compiled in-process by `TypstEngine` and displayed as images
+5. Clicking a rendered Typst block flips it to a source `TextEdit`; focus loss re-parses
+6. `Ctrl+S` serializes segments back to source and writes to disk
+7. File-watcher detects external writes and reloads (if buffer is clean)
+8. Backlinks updated by scanning all notes for `[[note-name]]` references
+
+### Segment Classification
+
+A paragraph (blank-line-separated block) is classified as `Typst` if it:
+- Contains `#` or `$` anywhere, OR
+- Starts with `=`, `-`, `+`, or `/`
+
+Otherwise it is `Plain`.
+
+### Preamble Propagation
+
+The first N contiguous Typst segments that contain only `#let`/`#import`/`#set`/`#show`/blank/comment lines are the "preamble". The preamble text is prepended to every subsequent Typst segment before compilation so that bindings and imports flow through all blocks.
+
+### Vault Directory Structure
+
+```
+~/vellum/
+  typst.toml        ← Typst package manifest (enables LSP root resolution)
+  note/             ← all .typ note files
+  asset/
+    theme.typ       ← dark theme template (auto-generated on first run)
+    (images, etc.)
+```
+
+`typst.toml` enables `tinymist` LSP to resolve `/asset/theme.typ` imports correctly.
+
+### Render Cache
+
+`MixedEditor` caches `TextureHandle` values in `HashMap<String, TextureHandle>` keyed by the *effective source* (preamble + block body). A failed compile is cached in `HashMap<String, String>` to avoid retrying every frame. Both caches are invalidated when the segment text changes (new key).
 
 ### UI Layout
 
-- Left sidebar: vault explorer + search
-- Center: plain text editor (`TextEdit`); toolbar has Save, Reload, Open in Helix buttons
-- Right: Typst PDF preview (split-pane mode); preview header has Open in Helix + Open PDF buttons
-- Backlinks panel below editor in split-pane mode; tab-toggle mode shows Editor/Preview tabs
+```
+┌──────────────────────────────────────────────┐
+│  [sidebar toggle]              [status]       │  ← topbar
+├──────────┬───────────────────────────────────┤
+│  Vault   │                                   │
+│  Search  │    MixedEditor                    │
+│  ──────  │    (Plain: TextEdit inline)        │
+│  Notes   │    (Typst: rendered image,         │
+│          │     click → source TextEdit)       │
+│          ├───────────────────────────────────┤
+│          │   Backlinks panel                 │
+└──────────┴───────────────────────────────────┘
+```
 
 ### External Editor (Helix)
 
@@ -70,7 +113,11 @@ App config lives at `~/.config/vellum/config.toml`.
 
 ## Implementation Notes
 
-- PDF preview rasterizes at `target_width=2400` (set in `PreviewState::new()`); adjust for performance vs. quality trade-off
-- pdfium requires `PDFIUM_DYNAMIC_LIB_PATH` env var pointing to the directory containing `libpdfium.so`; the Nix dev shell sets this automatically
+- `TypstEngine::render_snippet` wraps each snippet in `#import "/asset/theme.typ": template\n#show: template\n\n{snippet}` before compiling
+- `comemo::evict(0)` is called before each compile to flush Typst's memoization cache
+- `typst-assets` provides bundled fonts including New Computer Modern Math (required for math rendering)
+- System fonts are loaded via `fontdb` in addition to bundled fonts
+- The file watcher filters out `.vellum-snippets/` paths to prevent self-triggering reload loops (this directory is no longer used but the filter remains as a safeguard)
 - Search uses regex; Tantivy is a future upgrade if zstd dependency conflicts are resolved
 - Obsidian-style `[[links]]` are parsed for backlink tracking
+- `typst::Library::default()` requires `use typst::LibraryExt` to be in scope (typst 0.14+)

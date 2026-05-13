@@ -2,8 +2,10 @@ mod app;
 mod editor_backend;
 mod git;
 mod helix_editor;
+mod mixed_editor;
 mod search;
-mod typst_compiler;
+mod segment;
+mod typst_engine;
 mod ui;
 mod vault;
 

@@ -26,10 +26,8 @@ pub fn show(app: &mut App, ctx: &egui::Context, ui: &mut egui::Ui) -> Option<App
     });
     ui.separator();
 
-    let out = app.editor.show(ctx, ui);
-    if out.save {
-        action = Some(AppAction::SaveCurrent);
-    }
+    let App { mixed, engine, .. } = app;
+    mixed.show(ctx, ui, engine);
 
     action
 }

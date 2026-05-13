@@ -68,9 +68,9 @@ impl Vault {
         if path.extension().and_then(|s| s.to_str()) != Some("typ") {
             path.set_extension("typ");
         }
-        if !path.exists() {
-            self.write_note(&path, NOTE_BOILERPLATE)?;
-        }
+        // if !path.exists() {
+        //     self.write_note(&path, NOTE_BOILERPLATE)?;
+        // }
         self.rescan();
         Ok(path)
     }

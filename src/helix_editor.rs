@@ -40,6 +40,13 @@ impl HelixEditor {
         self.dirty = false;
     }
 
+    /// Replace text and mark the buffer dirty (used when an external view
+    /// such as the mixed editor pushes changes back into the buffer).
+    pub fn replace_text(&mut self, text: String) {
+        self.text = text;
+        self.dirty = true;
+    }
+
     pub fn clear_dirty(&mut self) {
         self.dirty = false;
     }
