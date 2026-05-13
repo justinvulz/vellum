@@ -16,12 +16,14 @@ pub struct PreviewState {
     pub error: Option<String>,
     pub fallback_text: String,
     pub target_width: u32,
+    pub page_display_width: f32,
 }
 
 impl PreviewState {
     pub fn new() -> Self {
         Self {
             target_width: 2400,
+            page_display_width: 700.0,
             ..Default::default()
         }
     }

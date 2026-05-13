@@ -5,13 +5,7 @@ use walkdir::WalkDir;
 
 const TYPST_TOML: &str = "[package]\nname = \"vellum-notes\"\nversion = \"0.1.0\"\n";
 
-const DEFAULT_THEME: &str = r##"// Vellum theme — edit to customize
-#let template(doc) = {
-  set page(fill: rgb("#1b1b1b"), margin: 2cm)
-  set text(fill: rgb("#d4d4d4"))
-  doc
-}
-"##;
+const DEFAULT_THEME: &str = include_str!("../assets/default_theme.typ");
 
 const NOTE_BOILERPLATE: &str = "#import \"/asset/theme.typ\": template\n#show: template\n\n";
 

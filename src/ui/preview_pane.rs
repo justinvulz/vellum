@@ -64,14 +64,16 @@ pub fn show(app: &App, ui: &mut egui::Ui) -> Option<AppAction> {
         return action;
     }
 
-    let avail_w = ui.available_width().max(1.0);
+    // Fixed display width so text appears the same size regardless of panel width.
+    // Panel scrolls horizontally when narrower than a page.
+    let page_display_w = app.preview.page_display_width;
     egui::ScrollArea::both()
         .id_source("preview-scroll")
         .show(ui, |ui| {
             for page in &app.preview.pages {
                 let [w, h] = page.size;
-                let scale = (avail_w / w as f32).min(1.0);
-                let display_size = egui::vec2(w as f32 * scale, h as f32 * scale);
+                let scale = page_display_w / w as f32;
+                let display_size = egui::vec2(page_display_w, h as f32 * scale);
                 ui.add(egui::Image::new(&page.texture).fit_to_exact_size(display_size));
                 ui.add_space(8.0);
             }
