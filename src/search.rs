@@ -87,16 +87,3 @@ pub fn content_search(vault: &Vault, query: &str, limit: usize) -> Vec<ContentHi
     }
     hits
 }
-
-pub fn resolve_link(vault: &Vault, link_name: &str) -> Option<PathBuf> {
-    let target = link_name.trim().to_ascii_lowercase();
-    vault
-        .notes
-        .iter()
-        .find(|p| {
-            Vault::note_stem(p)
-                .map(|s| s.to_ascii_lowercase() == target)
-                .unwrap_or(false)
-        })
-        .cloned()
-}

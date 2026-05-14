@@ -1,8 +1,8 @@
 //! Mixed inline editor: plain paragraphs become editable `TextEdit`s,
 //! Typst paragraphs render as images and flip to source-editing on click.
 
-use crate::segment::{self, Segment};
-use crate::typst_engine::TypstEngine;
+use super::segment::{self, Segment};
+use super::typst_engine::TypstEngine;
 use std::collections::HashMap;
 
 pub struct MixedEditor {

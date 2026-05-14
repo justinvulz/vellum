@@ -1,8 +1,8 @@
+//! Launches Helix inside a terminal emulator for the current note.
+
 use anyhow::{Context, Result};
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
-use std::sync::mpsc::{channel, Receiver};
 
 pub fn open_in_helix(path: &Path) -> Result<()> {
     // (terminal, args before the command). Order matters — first hit wins.
@@ -57,45 +57,4 @@ fn which(bin: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
-}
-
-pub struct FileWatcher {
-    _watcher: RecommendedWatcher,
-    rx: Receiver<notify::Result<Event>>,
-}
-
-impl FileWatcher {
-    pub fn new(root: &Path) -> Result<Self> {
-        let (tx, rx) = channel();
-        let mut watcher = notify::recommended_watcher(move |res| {
-            let _ = tx.send(res);
-        })?;
-        watcher.watch(root, RecursiveMode::Recursive)?;
-        Ok(Self {
-            _watcher: watcher,
-            rx,
-        })
-    }
-
-    pub fn drain_changes(&self) -> Vec<PathBuf> {
-        let mut changed = Vec::new();
-        while let Ok(res) = self.rx.try_recv() {
-            if let Ok(event) = res {
-                for path in event.paths {
-                    if path.extension().and_then(|s| s.to_str()) != Some("typ") {
-                        continue;
-                    }
-                    // Ignore writes inside our snippet cache.
-                    if path
-                        .components()
-                        .any(|c| c.as_os_str() == ".vellum-snippets")
-                    {
-                        continue;
-                    }
-                    changed.push(path);
-                }
-            }
-        }
-        changed
-    }
 }

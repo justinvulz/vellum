@@ -33,13 +33,13 @@ WINIT_UNIX_BACKEND=x11 cargo run
 
 - **`app`** — main `App` struct, egui event loop, top-level state, coordinates all other modules
 - **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; subdirs: `note/`, `asset/`
-- **`segment`** — paragraph-based parser splitting source into `Plain` and `Typst` segments
-- **`mixed_editor`** — mixed inline editor: Plain segments use `TextEdit`, Typst segments render via `TypstEngine` and flip to source-edit on click
-- **`typst_engine`** — in-process Typst 0.14 compiler; implements `typst::World`; bundles fonts via `typst-assets`
-- **`editor_backend`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`; `FileWatcher` detects external changes and triggers reload
-- **`helix_editor`** — plain egui `TextEdit` buffer wrapper (`HelixEditor`); kept for fallback/external-edit buffer tracking
+- **`editor/`** — editor subsystem:
+  - **`segment`** — paragraph-based parser splitting source into `Plain` and `Typst` segments
+  - **`mixed`** — mixed inline editor (`MixedEditor`): Plain segments use `TextEdit`, Typst segments render via `TypstEngine` and flip to source-edit on click; owns the dirty flag and is the single source of truth for buffer state
+  - **`typst_engine`** — in-process Typst 0.14 compiler; implements `typst::World`; bundles fonts via `typst-assets`
+- **`external_editor`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`
+- **`file_watcher`** — `FileWatcher` detects external `.typ` changes and triggers reload
 - **`search`** — filename and content search; parses `[[wiki-links]]` for backlinks
-- **`git`** — optional Git sync (auto-commit, push/pull)
 - **`ui/`** — egui panels: vault explorer, editor view, backlinks panel
 
 ### Data Flow
@@ -100,7 +100,7 @@ The first N contiguous Typst segments that contain only `#let`/`#import`/`#set`/
 
 ### External Editor (Helix)
 
-`open_in_helix()` in `editor_backend.rs` tries terminals in order: `alacritty`, `kitty`, `foot`, `wezterm`, `ghostty`, `gnome-terminal`, `konsole`, `xterm`. Override with `$TERMINAL` env var. The dirty buffer is saved before launching. File-watcher reloads the buffer when Helix writes the file (only if buffer is clean).
+`open_in_helix()` in `external_editor.rs` tries terminals in order: `alacritty`, `kitty`, `foot`, `wezterm`, `ghostty`, `gnome-terminal`, `konsole`, `xterm`. Override with `$TERMINAL` env var. The dirty buffer is saved before launching. `FileWatcher` (in `file_watcher.rs`) reloads the buffer when Helix writes the file (only if buffer is clean).
 
 ### Config
 
@@ -117,7 +117,6 @@ App config lives at `~/.config/vellum/config.toml`.
 - `comemo::evict(0)` is called before each compile to flush Typst's memoization cache
 - `typst-assets` provides bundled fonts including New Computer Modern Math (required for math rendering)
 - System fonts are loaded via `fontdb` in addition to bundled fonts
-- The file watcher filters out `.vellum-snippets/` paths to prevent self-triggering reload loops (this directory is no longer used but the filter remains as a safeguard)
 - Search uses regex; Tantivy is a future upgrade if zstd dependency conflicts are resolved
 - Obsidian-style `[[links]]` are parsed for backlink tracking
 - `typst::Library::default()` requires `use typst::LibraryExt` to be in scope (typst 0.14+)

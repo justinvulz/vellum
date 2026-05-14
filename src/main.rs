@@ -1,11 +1,8 @@
 mod app;
-mod editor_backend;
-mod git;
-mod helix_editor;
-mod mixed_editor;
+mod editor;
+mod external_editor;
+mod file_watcher;
 mod search;
-mod segment;
-mod typst_engine;
 mod ui;
 mod vault;
 
