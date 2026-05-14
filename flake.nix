@@ -22,11 +22,45 @@
         libXrandr
         libXi
         libxcb
-        # PDF rendering (pdfium-render dlopens libpdfium.so)
-        pdfium-binaries
       ];
+
+      vellum = pkgs.rustPlatform.buildRustPackage {
+        pname = "vellum";
+        version = "0.1.0";
+        src = ./.;
+        cargoLock.lockFile = ./Cargo.lock;
+
+        nativeBuildInputs = with pkgs; [
+          pkg-config
+          makeWrapper
+        ];
+        buildInputs = runtimeLibs;
+
+        # The compiled binary doesn't link against the dlopen'd libs, so the
+        # store path doesn't pull them in; wrap LD_LIBRARY_PATH at runtime.
+        postFixup = ''
+          wrapProgram $out/bin/vellum \
+            --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeLibs}
+        '';
+
+        meta = with pkgs.lib; {
+          description = "Typst-native desktop note-taking app";
+          mainProgram = "vellum";
+          platforms = platforms.linux;
+        };
+      };
     in
     {
+      packages.${system} = {
+        default = vellum;
+        vellum = vellum;
+      };
+
+      apps.${system}.default = {
+        type = "app";
+        program = "${vellum}/bin/vellum";
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         packages =
           with pkgs;
@@ -42,8 +76,6 @@
 
         # Make the dlopen()'d libs discoverable to `cargo run`.
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
-        # pdfium-render checks this env var to find libpdfium.so explicitly.
-        PDFIUM_DYNAMIC_LIB_PATH = "${pkgs.pdfium-binaries}/lib";
       };
     };
 }

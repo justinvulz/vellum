@@ -159,108 +159,122 @@ impl MixedEditor {
             .id_source("mixed-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_min_width(CONTENT_WIDTH_PT);
-                ui.set_max_width(CONTENT_WIDTH_PT);
-                for i in 0..self.segments.len() {
-                    let seg_id = egui::Id::new(("mixed-segment", i));
+                // Centre the column when the viewport is wider than the
+                // editor; flush-left (padding == 0) when narrower, letting
+                // the outer ScrollArea handle horizontal overflow.
+                let padding =
+                    ((ui.available_width() - CONTENT_WIDTH_PT) / 2.0).max(0.0);
+                ui.horizontal_top(|ui| {
+                    ui.add_space(padding);
+                    ui.vertical(|ui| {
+                        ui.set_min_width(CONTENT_WIDTH_PT);
+                        ui.set_max_width(CONTENT_WIDTH_PT);
+                        for i in 0..self.segments.len() {
+                            let seg_id = egui::Id::new(("mixed-segment", i));
 
-                    match &mut self.segments[i] {
-                        Segment::Plain(text) => {
-                            let resp = ui.add(
-                                egui::TextEdit::multiline(text)
-                                    .id(seg_id)
-                                    .frame(false)
-                                    .font(egui::FontId::new(
-                                        EDITOR_PT,
-                                        egui::FontFamily::Proportional,
-                                    ))
-                                    .desired_width(CONTENT_WIDTH_PT),
-                            );
-                            if resp.changed() {
-                                any_changed = true;
+                            match &mut self.segments[i] {
+                                Segment::Plain(text) => {
+                                    let resp = ui.add(
+                                        egui::TextEdit::multiline(text)
+                                            .id(seg_id)
+                                            .frame(false)
+                                            .font(egui::FontId::new(
+                                                EDITOR_PT,
+                                                egui::FontFamily::Proportional,
+                                            ))
+                                            .desired_width(CONTENT_WIDTH_PT),
+                                    );
+                                    if resp.changed() {
+                                        any_changed = true;
+                                    }
+                                    if resp.lost_focus() {
+                                        any_lost_focus = true;
+                                    }
+                                    if Some(seg_id) == pending {
+                                        resp.request_focus();
+                                    }
+                                }
+                                Segment::Typst(text) => {
+                                    let is_editing = new_editing == Some(i);
+                                    if is_editing {
+                                        let resp = ui.add(
+                                            egui::TextEdit::multiline(text)
+                                                .id(seg_id)
+                                                .font(egui::FontId::new(
+                                                    EDITOR_PT,
+                                                    egui::FontFamily::Monospace,
+                                                ))
+                                                .desired_width(CONTENT_WIDTH_PT),
+                                        );
+                                        if resp.changed() {
+                                            any_changed = true;
+                                        }
+                                        if resp.lost_focus() {
+                                            new_editing = None;
+                                            any_lost_focus = true;
+                                        }
+                                        if Some(seg_id) == pending {
+                                            resp.request_focus();
+                                        }
+                                    } else if let Some(err) = effective[i]
+                                        .as_ref()
+                                        .and_then(|k| self.failed.get(k))
+                                        .cloned()
+                                    {
+                                        ui.colored_label(
+                                            egui::Color32::LIGHT_RED,
+                                            "compile error (click to edit source)",
+                                        );
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&err)
+                                                    .monospace()
+                                                    .small(),
+                                            )
+                                            .wrap(true),
+                                        );
+                                        let resp = ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(text.as_str())
+                                                    .monospace(),
+                                            )
+                                            .sense(egui::Sense::click()),
+                                        );
+                                        if resp.clicked() {
+                                            new_editing = Some(i);
+                                            next_focus = Some(seg_id);
+                                        }
+                                    } else if let Some(tex) = effective[i]
+                                        .as_ref()
+                                        .and_then(|k| self.renders.get(k))
+                                    {
+                                        let [w_px, h_px] = tex.size();
+                                        // 1 typst pt ↔ 1 egui logical pt; the
+                                        // outer ScrollArea handles overflow if
+                                        // the panel is narrower than
+                                        // CONTENT_WIDTH_PT.
+                                        let size = egui::vec2(
+                                            w_px as f32 / PIXEL_PER_PT,
+                                            h_px as f32 / PIXEL_PER_PT,
+                                        );
+                                        let resp = ui.add(
+                                            egui::Image::new(tex)
+                                                .fit_to_exact_size(size)
+                                                .sense(egui::Sense::click()),
+                                        );
+                                        if resp.clicked() {
+                                            new_editing = Some(i);
+                                            next_focus = Some(seg_id);
+                                        }
+                                    } else {
+                                        ui.weak("⟳ rendering…");
+                                    }
+                                }
                             }
-                            if resp.lost_focus() {
-                                any_lost_focus = true;
-                            }
-                            if Some(seg_id) == pending {
-                                resp.request_focus();
-                            }
+                            ui.add_space(6.0);
                         }
-                        Segment::Typst(text) => {
-                            let is_editing = new_editing == Some(i);
-                            if is_editing {
-                                let resp = ui.add(
-                                    egui::TextEdit::multiline(text)
-                                        .id(seg_id)
-                                        .font(egui::FontId::new(
-                                            EDITOR_PT,
-                                            egui::FontFamily::Monospace,
-                                        ))
-                                        .desired_width(CONTENT_WIDTH_PT),
-                                );
-                                if resp.changed() {
-                                    any_changed = true;
-                                }
-                                if resp.lost_focus() {
-                                    new_editing = None;
-                                    any_lost_focus = true;
-                                }
-                                if Some(seg_id) == pending {
-                                    resp.request_focus();
-                                }
-                            } else if let Some(err) = effective[i]
-                                .as_ref()
-                                .and_then(|k| self.failed.get(k))
-                                .cloned()
-                            {
-                                ui.colored_label(
-                                    egui::Color32::LIGHT_RED,
-                                    "compile error (click to edit source)",
-                                );
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&err).monospace().small(),
-                                    )
-                                    .wrap(true),
-                                );
-                                let resp = ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(text.as_str()).monospace(),
-                                    )
-                                    .sense(egui::Sense::click()),
-                                );
-                                if resp.clicked() {
-                                    new_editing = Some(i);
-                                    next_focus = Some(seg_id);
-                                }
-                            } else if let Some(tex) = effective[i]
-                                .as_ref()
-                                .and_then(|k| self.renders.get(k))
-                            {
-                                let [w_px, h_px] = tex.size();
-                                // 1 typst pt ↔ 1 egui logical pt; the outer
-                                // ScrollArea handles overflow if the panel
-                                // is narrower than CONTENT_WIDTH_PT.
-                                let size = egui::vec2(
-                                    w_px as f32 / PIXEL_PER_PT,
-                                    h_px as f32 / PIXEL_PER_PT,
-                                );
-                                let resp = ui.add(
-                                    egui::Image::new(tex)
-                                        .fit_to_exact_size(size)
-                                        .sense(egui::Sense::click()),
-                                );
-                                if resp.clicked() {
-                                    new_editing = Some(i);
-                                    next_focus = Some(seg_id);
-                                }
-                            } else {
-                                ui.weak("⟳ rendering…");
-                            }
-                        }
-                    }
-                    ui.add_space(6.0);
-                }
+                    });
+                });
             });
 
         self.editing_index = new_editing;
