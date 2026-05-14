@@ -2,8 +2,13 @@
 //! Typst paragraphs render as images and flip to source-editing on click.
 
 use super::segment::{self, Segment};
-use super::typst_engine::TypstEngine;
+use super::typst_engine::{TypstEngine, PIXEL_PER_PT};
 use std::collections::HashMap;
+
+/// Width of the editor content column in egui logical points. Matches the
+/// `width: 600pt` set by the theme template so plain paragraphs and
+/// rendered Typst blocks share a single column.
+const CONTENT_WIDTH_PT: f32 = 600.0;
 
 pub struct MixedEditor {
     pub segments: Vec<Segment>,
@@ -63,20 +68,22 @@ impl MixedEditor {
         (parts.join("\n\n"), count)
     }
 
-    /// Build the "effective" source for each Typst segment (preamble + body
-    /// for segments after the preamble; body alone for the preamble blocks
-    /// themselves). Returns `None` for Plain segments.
+    /// Build the fully-wrapped typst source for each Typst segment
+    /// (template + preamble + body). Returns `None` for Plain segments.
     fn effective_sources(&self) -> Vec<Option<String>> {
         let (preamble, preamble_count) = self.preamble();
         self.segments
             .iter()
             .enumerate()
             .map(|(i, seg)| match seg {
-                Segment::Typst(t) => Some(if i < preamble_count || preamble.is_empty() {
-                    t.clone()
-                } else {
-                    format!("{preamble}\n\n{t}")
-                }),
+                Segment::Typst(t) => {
+                    let body = if i < preamble_count || preamble.is_empty() {
+                        t.clone()
+                    } else {
+                        format!("{preamble}\n\n{t}")
+                    };
+                    Some(wrap_source(&body))
+                }
                 _ => None,
             })
             .collect()
@@ -98,7 +105,7 @@ impl MixedEditor {
             .collect();
 
         for key in needed {
-            match engine.render_snippet(ctx, &key, 2.0) {
+            match engine.render(ctx, &key) {
                 Ok(tex) => {
                     self.renders.insert(key, tex);
                 }
@@ -152,10 +159,12 @@ impl MixedEditor {
         let mut any_lost_focus = false;
         let mut next_focus: Option<egui::Id> = None;
 
-        egui::ScrollArea::vertical()
+        egui::ScrollArea::both()
             .id_source("mixed-scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.set_min_width(CONTENT_WIDTH_PT);
+                ui.set_max_width(CONTENT_WIDTH_PT);
                 for i in 0..self.segments.len() {
                     let seg_id = egui::Id::new(("mixed-segment", i));
 
@@ -165,7 +174,8 @@ impl MixedEditor {
                                 egui::TextEdit::multiline(text)
                                     .id(seg_id)
                                     .frame(false)
-                                    .desired_width(f32::INFINITY),
+                                    .font(egui::TextStyle::Body)
+                                    .desired_width(CONTENT_WIDTH_PT),
                             );
                             if resp.changed() {
                                 any_changed = true;
@@ -183,8 +193,8 @@ impl MixedEditor {
                                 let resp = ui.add(
                                     egui::TextEdit::multiline(text)
                                         .id(seg_id)
-                                        .code_editor()
-                                        .desired_width(f32::INFINITY),
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_width(CONTENT_WIDTH_PT),
                                 );
                                 if resp.changed() {
                                     any_changed = true;
@@ -225,10 +235,14 @@ impl MixedEditor {
                                 .as_ref()
                                 .and_then(|k| self.renders.get(k))
                             {
-                                let [w, h] = tex.size();
-                                let avail = ui.available_width();
-                                let scale = (avail / w as f32).min(1.0);
-                                let size = egui::vec2(w as f32 * scale, h as f32 * scale);
+                                let [w_px, h_px] = tex.size();
+                                // 1 typst pt ↔ 1 egui logical pt; the outer
+                                // ScrollArea handles overflow if the panel
+                                // is narrower than CONTENT_WIDTH_PT.
+                                let size = egui::vec2(
+                                    w_px as f32 / PIXEL_PER_PT,
+                                    h_px as f32 / PIXEL_PER_PT,
+                                );
                                 let resp = ui.add(
                                     egui::Image::new(tex)
                                         .fit_to_exact_size(size)
@@ -259,6 +273,15 @@ impl MixedEditor {
             ctx.request_repaint();
         }
     }
+}
+
+/// Wrap a snippet body with the theme template. The template's own page
+/// width determines the rendered image width; the outer UI provides a
+/// horizontal scrollbar if the available area is narrower.
+fn wrap_source(body: &str) -> String {
+    format!(
+        "#import \"/asset/theme.typ\": template\n#show: template\n\n{body}\n"
+    )
 }
 
 fn is_preamble_only(text: &str) -> bool {

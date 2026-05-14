@@ -14,6 +14,11 @@ use typst::{Library, LibraryExt, World};
 
 const MAIN_PATH: &str = "/__vellum_snippet__.typ";
 
+/// Pixels-per-typst-pt used when rasterising snippets. The cache is keyed
+/// on snippet text alone, so this must stay constant. Values > 1 give
+/// oversampling for sharper text on non-HiDPI displays.
+pub const PIXEL_PER_PT: f32 = 2.0;
+
 pub struct TypstEngine {
     library: LazyHash<Library>,
     book: LazyHash<FontBook>,
@@ -72,18 +77,15 @@ impl TypstEngine {
         FileId::new(None, VirtualPath::new(MAIN_PATH))
     }
 
-    /// Compile a snippet wrapped in the theme template and return a texture.
-    pub fn render_snippet(
+    /// Compile a complete typst source string and return a texture. The
+    /// caller is responsible for wrapping the snippet body in the theme
+    /// template (`mixed::wrap_source` does this).
+    pub fn render(
         &self,
         ctx: &egui::Context,
-        snippet: &str,
-        pixel_per_pt: f32,
+        source: &str,
     ) -> Result<egui::TextureHandle> {
-        let wrapped = format!(
-            "#import \"/asset/theme.typ\": template\n#show: template\n\n{}\n",
-            snippet
-        );
-        *self.main.lock().unwrap() = Source::new(Self::main_id(), wrapped);
+        *self.main.lock().unwrap() = Source::new(Self::main_id(), source.to_string());
         self.cache.lock().unwrap().clear();
         comemo::evict(0);
 
@@ -104,7 +106,7 @@ impl TypstEngine {
             .pages
             .first()
             .ok_or_else(|| anyhow!("compiled document has no pages"))?;
-        let pixmap = typst_render::render(page, pixel_per_pt);
+        let pixmap = typst_render::render(page, PIXEL_PER_PT);
 
         let size = [pixmap.width() as usize, pixmap.height() as usize];
         let color_image =

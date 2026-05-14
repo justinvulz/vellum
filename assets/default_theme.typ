@@ -17,9 +17,9 @@
 #let template(doc) = {
   set page(
     fill: rgb("#0d0d0d"),
-    margin: (x:2cm,y:0cm),
-    width: 17cm,
-    height: 24cm
+    width: 600pt,
+    height: auto,
+    margin: 4pt,
     )
 
   
@@ -29,7 +29,7 @@
     bottom-edge: "descender",
     lang: "en",
     fill: rgb("#d4d4d4"),
-    size: 13pt
+    size: 16pt
   )
 
   set heading(numbering: "1.")
@@ -40,13 +40,13 @@
     // #v(0.65em)
   ]
   
-  show heading.where(level: 1): it => {
-    counter(math.equation).update(0)
-    text(weight: "bold")[#it]
-    v(0.65em)
-  }
+  // show heading.where(level: 1): it => {
+  //   counter(math.equation).update(0)
+  //   text(weight: "bold")[#it]
+  //   v(0.65em)
+  // }
 
-  set par(leading: 0.8em)
+  // set par(leading: 0.8em)
   show math.equation: set text(weight: "extralight")
   // show math.equation.where(block: true): e => [
   //   #block(width: 100%, inset: 0.3em)[

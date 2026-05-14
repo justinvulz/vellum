@@ -3,6 +3,7 @@ mod editor;
 mod external_editor;
 mod file_watcher;
 mod search;
+mod style;
 mod ui;
 mod vault;
 
@@ -31,6 +32,7 @@ fn main() -> Result<()> {
             visuals.window_fill = bg;
             visuals.extreme_bg_color = bg;
             cc.egui_ctx.set_visuals(visuals);
+            style::install(&cc.egui_ctx);
             Box::new(App::new(vault))
         }),
     )
