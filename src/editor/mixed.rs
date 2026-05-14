@@ -193,6 +193,9 @@ impl MixedEditor {
                                     if Some(seg_id) == pending {
                                         resp.request_focus();
                                     }
+                                    if resp.has_focus() {
+                                        paint_edit_outline(ui.painter(), resp.rect);
+                                    }
                                 }
                                 Segment::Typst(text) => {
                                     let is_editing = new_editing == Some(i);
@@ -216,6 +219,7 @@ impl MixedEditor {
                                         if Some(seg_id) == pending {
                                             resp.request_focus();
                                         }
+                                        paint_edit_outline(ui.painter(), resp.rect);
                                     } else if let Some(err) = effective[i]
                                         .as_ref()
                                         .and_then(|k| self.failed.get(k))
@@ -289,6 +293,16 @@ impl MixedEditor {
             ctx.request_repaint();
         }
     }
+}
+
+const EDIT_OUTLINE_COLOR: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x9e, 0xff);
+
+fn paint_edit_outline(painter: &egui::Painter, rect: egui::Rect) {
+    painter.rect_stroke(
+        rect.expand(3.0),
+        egui::Rounding::same(4.0),
+        egui::Stroke::new(1.5, EDIT_OUTLINE_COLOR),
+    );
 }
 
 /// Wrap a snippet body with the theme template, threading the app's
