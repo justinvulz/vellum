@@ -22,11 +22,12 @@ impl Vault {
         if !manifest.exists() {
             fs::write(&manifest, TYPST_TOML).context("writing typst.toml")?;
         }
+        // Always overwrite: the template signature (parameters and
+        // default values) is owned by the app, and on-disk drift causes
+        // confusing compile errors when the app passes new arguments.
         let theme_path = root.join("asset").join("theme.typ");
-        if !theme_path.exists() {
-            fs::write(&theme_path, DEFAULT_THEME)
-                .context("writing default theme template")?;
-        }
+        fs::write(&theme_path, DEFAULT_THEME)
+            .context("writing default theme template")?;
         let mut vault = Self {
             root,
             notes: Vec::new(),

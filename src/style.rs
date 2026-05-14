@@ -1,62 +1,91 @@
-//! App-wide font and text-size setup. Loads New Computer Modern from
-//! `typst-assets` into egui so plain text matches Typst-rendered text in
-//! both family and size.
+//! App-wide font and text-size setup. Loads a system sans-serif into egui
+//! and exposes the same family name to the Typst theme template so plain
+//! text and rendered blocks share a single font.
 
-use typst::foundations::Bytes;
-use typst::text::{Font, FontStyle, FontWeight};
+/// Chrome size (topbar, sidebar, buttons, status line), in points.
+pub const UI_PT: f32 = 14.0;
 
-/// Body text size, in points. Used for both the egui default and the
-/// Typst theme template — keep them in sync.
-pub const BODY_PT: f32 = 16.0;
+/// Mixed-editor body size, in points. Threaded into the Typst theme
+/// template (via `template.with(size: …)`) and applied to the editor's
+/// `TextEdit`s — single source of truth for plain and rendered blocks.
+pub const EDITOR_PT: f32 = 20.0;
+
+/// Width of the editor content column, in points. Threaded into the
+/// Typst theme template (via `template.with(width: …)`) and enforced on
+/// the surrounding egui layout so plain paragraphs share the column.
+pub const CONTENT_WIDTH_PT: f32 = 800.0;
+
+/// Sans-serif families to try, in priority order. The Typst theme uses
+/// the same list, so whichever family the host system provides is the
+/// one both renderers pick up.
+pub const SANS_FAMILIES: &[&str] = &[
+    "Inter",
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Ubuntu",
+    "Helvetica",
+    "Arial",
+];
 
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    for data in typst_assets::fonts() {
-        let bytes = Bytes::new(data.to_vec());
-        let Some(font) = Font::new(bytes, 0) else {
-            continue;
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+
+    for &family in SANS_FAMILIES {
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Name(family)],
+            weight: fontdb::Weight::NORMAL,
+            stretch: fontdb::Stretch::Normal,
+            style: fontdb::Style::Normal,
         };
-        let info = font.info();
-        if info.family == "New Computer Modern"
-            && info.variant.style == FontStyle::Normal
-            && info.variant.weight == FontWeight::REGULAR
-        {
-            let key = "ncm".to_string();
-            fonts
-                .font_data
-                .insert(key.clone(), egui::FontData::from_static(data));
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .insert(0, key);
-            break;
-        }
+        let Some(id) = db.query(&query) else { continue };
+        let Some(face) = db.face(id) else { continue };
+        let data = match &face.source {
+            fontdb::Source::File(path) => std::fs::read(path).ok(),
+            fontdb::Source::Binary(bytes) | fontdb::Source::SharedFile(_, bytes) => {
+                Some(bytes.as_ref().as_ref().to_vec())
+            }
+        };
+        let Some(data) = data else { continue };
+
+        let key = format!("sans-{family}");
+        fonts
+            .font_data
+            .insert(key.clone(), egui::FontData::from_owned(data));
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, key);
+        break;
     }
+
     ctx.set_fonts(fonts);
 
     use egui::{FontFamily, FontId, TextStyle};
     let mut style = (*ctx.style()).clone();
     style.text_styles.insert(
         TextStyle::Heading,
-        FontId::new(BODY_PT * 1.4, FontFamily::Proportional),
+        FontId::new(UI_PT * 1.4, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Body,
-        FontId::new(BODY_PT, FontFamily::Proportional),
+        FontId::new(UI_PT, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Button,
-        FontId::new(BODY_PT, FontFamily::Proportional),
+        FontId::new(UI_PT, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Monospace,
-        FontId::new(BODY_PT, FontFamily::Monospace),
+        FontId::new(UI_PT, FontFamily::Monospace),
     );
     style.text_styles.insert(
         TextStyle::Small,
-        FontId::new(BODY_PT - 3.0, FontFamily::Proportional),
+        FontId::new((UI_PT - 2.0).max(10.0), FontFamily::Proportional),
     );
     ctx.set_style(style);
 }

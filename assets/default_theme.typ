@@ -14,22 +14,32 @@
   )
 }
 
-#let template(doc) = {
+// Width and size are passed in by the app (see style.rs); defaults here
+// just keep `typst compile` workable when the file is opened standalone.
+#let template(doc, width: 600pt, size: 16pt) = {
   set page(
     fill: rgb("#0d0d0d"),
-    width: 600pt,
+    width: width,
     height: auto,
     margin: 4pt,
     )
 
-  
+
   set text(
-    font: ("New Computer Modern","Source Han Sans"),
+    font: (
+      "Inter",
+      "Noto Sans",
+      "DejaVu Sans",
+      "Liberation Sans",
+      "Ubuntu",
+      "Helvetica",
+      "Arial",
+    ),
     top-edge: "ascender",
     bottom-edge: "descender",
     lang: "en",
     fill: rgb("#d4d4d4"),
-    size: 16pt
+    size: size
   )
 
   set heading(numbering: "1.")

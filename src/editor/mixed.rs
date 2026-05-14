@@ -3,12 +3,8 @@
 
 use super::segment::{self, Segment};
 use super::typst_engine::{TypstEngine, PIXEL_PER_PT};
+use crate::style::{CONTENT_WIDTH_PT, EDITOR_PT};
 use std::collections::HashMap;
-
-/// Width of the editor content column in egui logical points. Matches the
-/// `width: 600pt` set by the theme template so plain paragraphs and
-/// rendered Typst blocks share a single column.
-const CONTENT_WIDTH_PT: f32 = 600.0;
 
 pub struct MixedEditor {
     pub segments: Vec<Segment>,
@@ -174,7 +170,10 @@ impl MixedEditor {
                                 egui::TextEdit::multiline(text)
                                     .id(seg_id)
                                     .frame(false)
-                                    .font(egui::TextStyle::Body)
+                                    .font(egui::FontId::new(
+                                        EDITOR_PT,
+                                        egui::FontFamily::Proportional,
+                                    ))
                                     .desired_width(CONTENT_WIDTH_PT),
                             );
                             if resp.changed() {
@@ -193,7 +192,10 @@ impl MixedEditor {
                                 let resp = ui.add(
                                     egui::TextEdit::multiline(text)
                                         .id(seg_id)
-                                        .font(egui::TextStyle::Monospace)
+                                        .font(egui::FontId::new(
+                                            EDITOR_PT,
+                                            egui::FontFamily::Monospace,
+                                        ))
                                         .desired_width(CONTENT_WIDTH_PT),
                                 );
                                 if resp.changed() {
@@ -275,12 +277,14 @@ impl MixedEditor {
     }
 }
 
-/// Wrap a snippet body with the theme template. The template's own page
-/// width determines the rendered image width; the outer UI provides a
-/// horizontal scrollbar if the available area is narrower.
+/// Wrap a snippet body with the theme template, threading the app's
+/// page width and editor body size through `template.with(...)` so the
+/// rendered image stays in lock-step with the surrounding egui layout.
 fn wrap_source(body: &str) -> String {
     format!(
-        "#import \"/asset/theme.typ\": template\n#show: template\n\n{body}\n"
+        "#import \"/asset/theme.typ\": template\n\
+         #show: template.with(width: {CONTENT_WIDTH_PT}pt, size: {EDITOR_PT}pt)\n\
+         \n{body}\n"
     )
 }
 
