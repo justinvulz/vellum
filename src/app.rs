@@ -1,3 +1,10 @@
+//! Top-level application state and the eframe `update` loop.
+//!
+//! `App` owns the vault, editor, file watcher, and search caches.
+//! UI panels and keyboard shortcuts hand back `AppAction` values
+//! rather than mutating `App` directly — `perform` is the single
+//! place that turns intent into state changes.
+
 use crate::editor::mixed::MixedEditor;
 use crate::editor::typst_engine::TypstEngine;
 use crate::file_watcher::FileWatcher;
@@ -57,9 +64,7 @@ impl App {
                 self.selected = Some(path);
                 self.status = "opened".into();
             }
-            Err(e) => {
-                self.status = format!("open failed: {e}");
-            }
+            Err(e) => self.status = format!("open failed: {e}"),
         }
     }
 
@@ -82,11 +87,10 @@ impl App {
     }
 
     fn reload_current(&mut self) {
-        if let Some(path) = self.selected.clone() {
-            if let Ok(text) = self.vault.read_note(&path) {
-                self.mixed.load(&text);
-                self.status = "reloaded".into();
-            }
+        let Some(path) = self.selected.clone() else { return };
+        if let Ok(text) = self.vault.read_note(&path) {
+            self.mixed.load(&text);
+            self.status = "reloaded".into();
         }
     }
 
@@ -126,10 +130,11 @@ impl App {
         }
     }
 
+    /// Drain file-watcher events, rescan the vault, and (when the
+    /// current note changed externally and the buffer is clean)
+    /// reload it.
     fn poll_watcher(&mut self) {
-        let Some(watcher) = &self.watcher else {
-            return;
-        };
+        let Some(watcher) = &self.watcher else { return };
         let changes = watcher.drain_changes();
         if changes.is_empty() {
             return;
@@ -146,38 +151,38 @@ impl App {
             }
         }
     }
+
+    /// Translate the frame's keyboard input into pending actions.
+    /// Shortcuts that need a selected note are suppressed when none is open.
+    fn shortcut_actions(&self, ctx: &egui::Context) -> Vec<AppAction> {
+        if self.selected.is_none() {
+            return Vec::new();
+        }
+        let (ctrl_e, ctrl_s) = ctx.input(|i| {
+            (
+                i.modifiers.ctrl && i.key_pressed(egui::Key::E),
+                i.modifiers.ctrl && i.key_pressed(egui::Key::S),
+            )
+        });
+        let mut actions = Vec::new();
+        if ctrl_e {
+            actions.push(AppAction::OpenInHelix);
+        }
+        if ctrl_s {
+            actions.push(AppAction::SaveCurrent);
+        }
+        actions
+    }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_watcher();
 
-        let mut actions: Vec<AppAction> = Vec::new();
-
-        let ctrl_e = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::E));
-        if ctrl_e && self.selected.is_some() {
-            actions.push(AppAction::OpenInHelix);
-        }
-        let ctrl_s = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::S));
-        if ctrl_s && self.selected.is_some() {
-            actions.push(AppAction::SaveCurrent);
-        }
+        let mut actions = self.shortcut_actions(ctx);
 
         egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let icon = if self.sidebar_open { "◀" } else { "▶" };
-                if ui.button(icon).clicked() {
-                    self.sidebar_open = !self.sidebar_open;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !self.status.is_empty() {
-                        ui.label(&self.status);
-                    }
-                    if self.mixed.dirty {
-                        ui.colored_label(egui::Color32::YELLOW, "● unsaved");
-                    }
-                });
-            });
+            ui::topbar::show(self, ui);
         });
 
         egui::SidePanel::left("vault")

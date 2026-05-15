@@ -28,6 +28,19 @@ pub const SANS_FAMILIES: &[&str] = &[
     "Arial",
 ];
 
+/// Accent stroke used to mark the segment that is currently being edited.
+pub const EDIT_OUTLINE_COLOR: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x9e, 0xff);
+
+/// Draw a soft accent outline around a widget — the visual cue that
+/// the surrounded segment is in source-edit mode.
+pub fn paint_edit_outline(painter: &egui::Painter, rect: egui::Rect) {
+    painter.rect_stroke(
+        rect.expand(3.0),
+        egui::Rounding::same(4.0),
+        egui::Stroke::new(1.5, EDIT_OUTLINE_COLOR),
+    );
+}
+
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 

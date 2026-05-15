@@ -1,3 +1,9 @@
+//! Vault directory layout, file I/O for notes, and theme bootstrap.
+//!
+//! A vault is a directory containing `note/` (the `.typ` files),
+//! `asset/` (theme + images), and a `typst.toml` manifest that lets
+//! tinymist resolve `/asset/…` imports.
+
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,20 +20,9 @@ pub struct Vault {
 
 impl Vault {
     pub fn open_or_init(root: PathBuf) -> Result<Self> {
-        fs::create_dir_all(root.join("note"))
-            .with_context(|| format!("creating vault/note at {}", root.display()))?;
-        fs::create_dir_all(root.join("asset"))
-            .with_context(|| format!("creating vault/asset at {}", root.display()))?;
-        let manifest = root.join("typst.toml");
-        if !manifest.exists() {
-            fs::write(&manifest, TYPST_TOML).context("writing typst.toml")?;
-        }
-        // Always overwrite: the template signature (parameters and
-        // default values) is owned by the app, and on-disk drift causes
-        // confusing compile errors when the app passes new arguments.
-        let theme_path = root.join("asset").join("theme.typ");
-        fs::write(&theme_path, DEFAULT_THEME)
-            .context("writing default theme template")?;
+        ensure_directories(&root)?;
+        ensure_manifest(&root)?;
+        ensure_theme(&root)?;
         let mut vault = Self {
             root,
             notes: Vec::new(),
@@ -84,4 +79,29 @@ pub fn default_vault_dir() -> PathBuf {
     dirs::home_dir()
         .map(|h| h.join("vellum"))
         .unwrap_or_else(|| PathBuf::from("./vellum"))
+}
+
+fn ensure_directories(root: &Path) -> Result<()> {
+    fs::create_dir_all(root.join("note"))
+        .with_context(|| format!("creating vault/note at {}", root.display()))?;
+    fs::create_dir_all(root.join("asset"))
+        .with_context(|| format!("creating vault/asset at {}", root.display()))?;
+    Ok(())
+}
+
+fn ensure_manifest(root: &Path) -> Result<()> {
+    let manifest = root.join("typst.toml");
+    if !manifest.exists() {
+        fs::write(&manifest, TYPST_TOML).context("writing typst.toml")?;
+    }
+    Ok(())
+}
+
+/// Always overwrite the theme — the template signature (parameters
+/// and defaults) is owned by the app, and on-disk drift causes
+/// confusing compile errors when the app passes new arguments to
+/// `template.with(...)`.
+fn ensure_theme(root: &Path) -> Result<()> {
+    let theme_path = root.join("asset").join("theme.typ");
+    fs::write(&theme_path, DEFAULT_THEME).context("writing default theme template")
 }

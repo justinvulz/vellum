@@ -2,10 +2,14 @@
 //! and flips to a source `TextEdit` on click. Headings, math blocks,
 //! function calls, and plain prose all flow through the same pipeline.
 
+use super::preamble;
 use super::segment;
 use super::typst_engine::{TypstEngine, PIXEL_PER_PT};
-use crate::style::{CONTENT_WIDTH_PT, EDITOR_PT};
+use crate::style::{self, CONTENT_WIDTH_PT, EDITOR_PT};
 use std::collections::HashMap;
+
+/// Vertical gap between adjacent segments, in egui points.
+const SEGMENT_GAP: f32 = 6.0;
 
 pub struct MixedEditor {
     pub segments: Vec<String>,
@@ -13,9 +17,20 @@ pub struct MixedEditor {
     pub renders: HashMap<String, egui::TextureHandle>,
     pub failed: HashMap<String, String>,
     pub dirty: bool,
-    /// Focus to apply on the next frame (when the TextEdit for the segment
-    /// exists). Set when the user clicks a rendered segment.
+    /// Focus to apply on the next frame, once the matching `TextEdit`
+    /// exists. Set when the user clicks a rendered segment.
     pending_focus: Option<egui::Id>,
+}
+
+/// Scratch state collected during one frame's render pass. The
+/// `show_*` helpers write into it; `show()` applies the result after
+/// the inner egui closures unwind.
+#[derive(Default)]
+struct FrameState {
+    new_editing: Option<usize>,
+    any_changed: bool,
+    any_lost_focus: bool,
+    next_focus: Option<egui::Id>,
 }
 
 impl MixedEditor {
@@ -37,44 +52,57 @@ impl MixedEditor {
         }
         self.editing_index = None;
         self.dirty = false;
-        // Keep renders/failed: keys match by content, so unchanged segments
-        // keep their cached textures across reloads.
+        // Keep render/failed caches: keys are content-addressed, so
+        // unchanged segments keep their textures across reloads.
     }
 
     pub fn source(&self) -> String {
         segment::join(&self.segments)
     }
 
-    /// Initial segments containing only declaration lines (`#let`,
-    /// `#import`, `#set`, `#show`, comments, blanks). The preamble is
-    /// prepended to every following segment so bindings/imports flow
-    /// through the whole note.
-    fn preamble(&self) -> (String, usize) {
-        let mut parts: Vec<&str> = Vec::new();
-        let mut count = 0;
-        for seg in &self.segments {
-            if !is_preamble_only(seg) {
-                break;
-            }
-            parts.push(seg);
-            count += 1;
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        engine: &TypstEngine,
+    ) {
+        if self.segments.is_empty() {
+            self.segments.push(String::new());
         }
-        (parts.join("\n\n"), count)
+
+        let effective = self.effective_sources();
+        self.ensure_rendered(ctx, engine, &effective);
+        let pending = self.pending_focus.take();
+
+        let mut state = FrameState {
+            new_editing: self.editing_index,
+            ..Default::default()
+        };
+
+        show_content_column(ui, |ui| {
+            for i in 0..self.segments.len() {
+                self.show_segment(ui, i, &effective[i], pending, &mut state);
+                ui.add_space(SEGMENT_GAP);
+            }
+        });
+
+        self.apply_frame_state(ctx, state);
     }
 
-    /// Fully-wrapped Typst source per segment (template + preamble + body).
+    /// Wrapped Typst source per segment (template + preamble + body).
+    /// Also serves as the render-cache key.
     fn effective_sources(&self) -> Vec<String> {
-        let (preamble, preamble_count) = self.preamble();
+        let (preamble_text, preamble_count) = preamble::collect(&self.segments);
         self.segments
             .iter()
             .enumerate()
-            .map(|(i, t)| {
-                let body = if i < preamble_count || preamble.is_empty() {
-                    t.clone()
+            .map(|(i, body)| {
+                let composed = if i < preamble_count || preamble_text.is_empty() {
+                    body.clone()
                 } else {
-                    format!("{preamble}\n\n{t}")
+                    format!("{preamble_text}\n\n{body}")
                 };
-                wrap_source(&body)
+                preamble::wrap_for_render(&composed)
             })
             .collect()
     }
@@ -105,16 +133,15 @@ impl MixedEditor {
         }
     }
 
-    /// Re-split segments after an edit (a blank line typed inside a
-    /// paragraph should split it; a typed `#` may absorb following text
-    /// into a function call).
+    /// Re-split segments after an edit — a blank line typed inside a
+    /// paragraph should split it; a `#` at the start of a line may
+    /// promote a text segment into a function-call segment.
     fn re_parse(&mut self) {
-        let source = self.source();
         let prior_text = self
             .editing_index
             .and_then(|i| self.segments.get(i).cloned());
 
-        self.segments = segment::parse_segments(&source);
+        self.segments = segment::parse_segments(&self.source());
         if self.segments.is_empty() {
             self.segments.push(String::new());
         }
@@ -123,155 +150,120 @@ impl MixedEditor {
             prior_text.and_then(|t| self.segments.iter().position(|s| s == &t));
     }
 
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        ui: &mut egui::Ui,
-        engine: &TypstEngine,
-    ) {
-        if self.segments.is_empty() {
-            self.segments.push(String::new());
-        }
-
-        let effective = self.effective_sources();
-        self.ensure_rendered(ctx, engine, &effective);
-
-        let pending = self.pending_focus.take();
-        let mut new_editing = self.editing_index;
-        let mut any_changed = false;
-        let mut any_lost_focus = false;
-        let mut next_focus: Option<egui::Id> = None;
-
-        egui::ScrollArea::both()
-            .id_source("mixed-scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let padding =
-                    ((ui.available_width() - CONTENT_WIDTH_PT) / 2.0).max(0.0);
-                ui.horizontal_top(|ui| {
-                    ui.add_space(padding);
-                    ui.vertical(|ui| {
-                        ui.set_min_width(CONTENT_WIDTH_PT);
-                        ui.set_max_width(CONTENT_WIDTH_PT);
-                        for i in 0..self.segments.len() {
-                            let seg_id = egui::Id::new(("mixed-segment", i));
-                            let is_editing = new_editing == Some(i);
-                            let key = effective[i].clone();
-
-                            if is_editing {
-                                let resp = ui.add(
-                                    egui::TextEdit::multiline(&mut self.segments[i])
-                                        .id(seg_id)
-                                        .font(egui::FontId::new(
-                                            EDITOR_PT,
-                                            egui::FontFamily::Monospace,
-                                        ))
-                                        .desired_width(CONTENT_WIDTH_PT),
-                                );
-                                if resp.changed() {
-                                    any_changed = true;
-                                }
-                                if resp.lost_focus() {
-                                    new_editing = None;
-                                    any_lost_focus = true;
-                                }
-                                if Some(seg_id) == pending {
-                                    resp.request_focus();
-                                }
-                                paint_edit_outline(ui.painter(), resp.rect);
-                            } else if let Some(err) = self.failed.get(&key).cloned() {
-                                ui.colored_label(
-                                    egui::Color32::LIGHT_RED,
-                                    "compile error (click to edit source)",
-                                );
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&err)
-                                            .monospace()
-                                            .small(),
-                                    )
-                                    .wrap(true),
-                                );
-                                let resp = ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(
-                                            self.segments[i].as_str(),
-                                        )
-                                        .monospace(),
-                                    )
-                                    .sense(egui::Sense::click()),
-                                );
-                                if resp.clicked() {
-                                    new_editing = Some(i);
-                                    next_focus = Some(seg_id);
-                                }
-                            } else if let Some(tex) = self.renders.get(&key) {
-                                let [w_px, h_px] = tex.size();
-                                let size = egui::vec2(
-                                    w_px as f32 / PIXEL_PER_PT,
-                                    h_px as f32 / PIXEL_PER_PT,
-                                );
-                                let resp = ui.add(
-                                    egui::Image::new(tex)
-                                        .fit_to_exact_size(size)
-                                        .sense(egui::Sense::click()),
-                                );
-                                if resp.clicked() {
-                                    new_editing = Some(i);
-                                    next_focus = Some(seg_id);
-                                }
-                            } else {
-                                ui.weak("⟳ rendering…");
-                            }
-                            ui.add_space(6.0);
-                        }
-                    });
-                });
-            });
-
-        self.editing_index = new_editing;
-        if any_changed {
+    fn apply_frame_state(&mut self, ctx: &egui::Context, state: FrameState) {
+        self.editing_index = state.new_editing;
+        if state.any_changed {
             self.dirty = true;
         }
-        if any_lost_focus {
+        if state.any_lost_focus {
             self.re_parse();
         }
-        if next_focus.is_some() {
-            self.pending_focus = next_focus;
+        if state.next_focus.is_some() {
+            self.pending_focus = state.next_focus;
             ctx.request_repaint();
+        }
+    }
+
+    fn show_segment(
+        &mut self,
+        ui: &mut egui::Ui,
+        i: usize,
+        effective_key: &str,
+        pending: Option<egui::Id>,
+        state: &mut FrameState,
+    ) {
+        let seg_id = egui::Id::new(("mixed-segment", i));
+        let is_editing = state.new_editing == Some(i);
+
+        if is_editing {
+            let resp = show_editing(ui, &mut self.segments[i], seg_id);
+            if resp.changed() {
+                state.any_changed = true;
+            }
+            if resp.lost_focus() {
+                state.new_editing = None;
+                state.any_lost_focus = true;
+            }
+            if Some(seg_id) == pending {
+                resp.request_focus();
+            }
+            style::paint_edit_outline(ui.painter(), resp.rect);
+        } else if let Some(err) = self.failed.get(effective_key).cloned() {
+            if show_compile_error(ui, &self.segments[i], &err) {
+                state.new_editing = Some(i);
+                state.next_focus = Some(seg_id);
+            }
+        } else if let Some(tex) = self.renders.get(effective_key).cloned() {
+            if show_rendered(ui, &tex) {
+                state.new_editing = Some(i);
+                state.next_focus = Some(seg_id);
+            }
+        } else {
+            ui.weak("⟳ rendering…");
         }
     }
 }
 
-const EDIT_OUTLINE_COLOR: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x9e, 0xff);
-
-fn paint_edit_outline(painter: &egui::Painter, rect: egui::Rect) {
-    painter.rect_stroke(
-        rect.expand(3.0),
-        egui::Rounding::same(4.0),
-        egui::Stroke::new(1.5, EDIT_OUTLINE_COLOR),
-    );
-}
-
-/// Wrap a snippet body with the theme template, threading the app's
-/// page width and editor body size through `template.with(...)` so the
-/// rendered image stays in lock-step with the surrounding egui layout.
-fn wrap_source(body: &str) -> String {
-    format!(
-        "#import \"/asset/theme.typ\": template\n\
-         #show: template.with(width: {CONTENT_WIDTH_PT}pt, size: {EDITOR_PT}pt)\n\
-         \n{body}\n"
+fn show_editing(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    seg_id: egui::Id,
+) -> egui::Response {
+    ui.add(
+        egui::TextEdit::multiline(text)
+            .id(seg_id)
+            .font(egui::FontId::new(EDITOR_PT, egui::FontFamily::Monospace))
+            .desired_width(CONTENT_WIDTH_PT),
     )
 }
 
-fn is_preamble_only(text: &str) -> bool {
-    text.lines().all(|line| {
-        let t = line.trim_start();
-        t.is_empty()
-            || t.starts_with("//")
-            || t.starts_with("#let")
-            || t.starts_with("#import")
-            || t.starts_with("#set")
-            || t.starts_with("#show")
-    })
+/// Render the compile-error UI for a segment and return whether the
+/// user clicked into the source — the cue to flip it to edit mode.
+fn show_compile_error(ui: &mut egui::Ui, body: &str, err: &str) -> bool {
+    ui.colored_label(
+        egui::Color32::LIGHT_RED,
+        "compile error (click to edit source)",
+    );
+    ui.add(
+        egui::Label::new(egui::RichText::new(err).monospace().small()).wrap(true),
+    );
+    ui.add(
+        egui::Label::new(egui::RichText::new(body).monospace())
+            .sense(egui::Sense::click()),
+    )
+    .clicked()
+}
+
+/// Render a compiled-Typst texture at 1 egui pt ↔ 1 typst pt. Returns
+/// whether the user clicked, signalling a flip to edit mode.
+fn show_rendered(ui: &mut egui::Ui, tex: &egui::TextureHandle) -> bool {
+    let [w_px, h_px] = tex.size();
+    let size = egui::vec2(w_px as f32 / PIXEL_PER_PT, h_px as f32 / PIXEL_PER_PT);
+    ui.add(
+        egui::Image::new(tex)
+            .fit_to_exact_size(size)
+            .sense(egui::Sense::click()),
+    )
+    .clicked()
+}
+
+/// Scrollable, centred, fixed-width content column. All segments lay
+/// out inside this column so plain text and rendered Typst blocks
+/// share one width; the outer `ScrollArea` handles overflow when the
+/// viewport is narrower than `CONTENT_WIDTH_PT`.
+fn show_content_column(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::both()
+        .id_source("mixed-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let padding = ((ui.available_width() - CONTENT_WIDTH_PT) / 2.0).max(0.0);
+            ui.horizontal_top(|ui| {
+                ui.add_space(padding);
+                ui.vertical(|ui| {
+                    ui.set_min_width(CONTENT_WIDTH_PT);
+                    ui.set_max_width(CONTENT_WIDTH_PT);
+                    content(ui);
+                });
+            });
+        });
 }
