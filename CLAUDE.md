@@ -36,13 +36,15 @@ WINIT_UNIX_BACKEND=x11 cargo run
 - **`editor/`** — editor subsystem:
   - **`segment`** — tree-based splitter; walks `typst::syntax::parse` output and emits one segment per heading / block-math / top-level `#`-code (alone on its line) / text paragraph
   - **`preamble`** — preamble detection (`is_preamble_only`, `collect`) and theme-template source wrapping (`wrap_for_render`)
-  - **`mixed`** — mixed inline editor (`MixedEditor`): every segment renders via `TypstEngine` and flips to a monospace source `TextEdit` on click; owns the dirty flag and is the single source of truth for buffer state
+  - **`highlight`** — syntax highlighter for the source `TextEdit`; walks Typst's parse tree and builds a coloured `LayoutJob` keyed on `style::SyntaxColors`
+  - **`mixed`** — mixed inline editor (`MixedEditor`): every segment renders via `TypstEngine` and flips to a monospace source `TextEdit` on click; suppresses egui's full-row caret and paints its own blinking font-sized one; owns the dirty flag and `EditorConfig`
   - **`typst_engine`** — in-process Typst 0.14 compiler; implements `typst::World`; bundles fonts via `typst-assets`
 - **`external_editor`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`
 - **`file_watcher`** — `FileWatcher` reports external `.typ` changes; `App::poll_watcher` consumes them
 - **`search`** — filename and content search; parses `[[wiki-links]]` for backlinks
-- **`style`** — fonts, text styles, sizing constants (`UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`), and the edit-mode accent outline (`paint_edit_outline`)
+- **`style`** — fonts, text styles, sizing constants (`UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`), the edit-mode accent outline (`paint_edit_outline`), and the editor config types (`EditorConfig`, `SyntaxColors`)
 - **`ui/`** — egui panels: `topbar`, `vault_explorer`, `editor_view`, `backlinks_panel`
+- **Debug tracing** — `log` + `env_logger` initialised in `main`; default filter `info,vellum=debug`, overridable via `RUST_LOG`
 
 ### Data Flow
 
@@ -75,12 +77,22 @@ Because the parser is tree-aware, a blank line *inside* a function call's conten
 
 Each segment is in one of four states each frame:
 
-- **Editing** — monospace `TextEdit` with a blue edit outline (`style::paint_edit_outline`)
+- **Editing** — monospace `TextEdit` with a blue edit outline (`style::paint_edit_outline`). Text is laid out via a custom layouter that runs `editor::highlight::highlight` over the source on every keystroke, producing a coloured `LayoutJob`. egui's built-in caret is suppressed and `mixed::paint_caret` draws a `font_size`-tall blinking caret centred in the row.
 - **Compile error** — red banner + error text + source label; click to edit
 - **Rendered** — compiled Typst image at 1 egui pt ↔ 1 typst pt; click to edit
 - **Pending** — `⟳ rendering…` placeholder while the engine compiles
 
 The per-frame scratch state (`FrameState` in `mixed.rs`) collects events from each segment's helper and is applied after the egui closures unwind.
+
+### Editor Config
+
+`style::EditorConfig` (exposed as `MixedEditor::config`, `pub` field) holds runtime knobs for the source view:
+
+- `font_size`, `font_family` — TextEdit font.
+- `line_space: Option<f32>` — extra baseline-to-baseline gap on top of `font_size`. `None` keeps egui's natural row height; `Some(x)` widens lines (and would widen egui's caret — except we paint our own, so the caret stays at `font_size`).
+- `colors: SyntaxColors` — per-token-kind palette (`dollar`, `hash`, `heading_marker`, `comment`, `string`, `number`, `keyword`, `ident`, `punct`, `emphasis`, `list_marker`, `default`).
+
+Mutate after `MixedEditor::new()` to retheme at runtime.
 
 ### Vault Directory Structure
 
@@ -121,7 +133,12 @@ The per-frame scratch state (`FrameState` in `mixed.rs`) collects events from ea
 
 ### Config
 
-No on-disk config file yet. Tunables live as constants in `src/style.rs`: `UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`, `SANS_FAMILIES`, `EDIT_OUTLINE_COLOR`. External-editor selection is overridden via the `$TERMINAL` env var (handled in `external_editor.rs`).
+No on-disk config file yet. Two layers of in-code tunables:
+
+- **Global style** — constants in `src/style.rs`: `UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`, `SANS_FAMILIES`, `EDIT_OUTLINE_COLOR`.
+- **Per-editor** — `style::EditorConfig` exposed as `MixedEditor::config` (font, `line_space`, `SyntaxColors`); mutate at runtime to retheme.
+
+External-editor selection is overridden via the `$TERMINAL` env var (handled in `external_editor.rs`). Logging filter via `RUST_LOG` (default `info,vellum=debug`).
 
 ## Key Shortcuts
 
@@ -136,6 +153,8 @@ No on-disk config file yet. Tunables live as constants in `src/style.rs`: `UI_PT
 - `comemo::evict(0)` is called before each compile to flush Typst's memoization cache.
 - `typst-assets` provides bundled fonts including New Computer Modern Math (required for math rendering). System fonts are loaded via `fontdb` in addition.
 - The render cache key is the *fully wrapped* source (template + preamble + body), so changing any of those parts invalidates the entry. Failed compiles are also cached (in `failed: HashMap<String, String>`) to avoid retrying every frame.
+- **Caret quirk**: in egui 0.27 the built-in caret rect grows to match the galley row span (`cursor_rect` in `text_cursor_state.rs` uses `max.y.at_least(min.y + row_height)`), so widening `line_space` would stretch the caret. `mixed::show_editing` works around this by setting `visuals_mut().text_cursor.color = TRANSPARENT` for the duration of `TextEdit::show`, then painting a `font_size`-tall blinking caret manually in `paint_caret`. Highlighter sections use `valign: Align::Center` so the caret tracks the glyph centre.
+- **Theme override**: `assets/default_theme.typ` is `include_str!`'d at compile time and rewritten to `~/vellum/asset/theme.typ` by `vault::ensure_theme` on every launch. The signature `template(doc, width, size)` is owned by the app — changing it on disk will be overwritten next start.
 - Search uses regex; Tantivy is a future upgrade if zstd dependency conflicts are resolved.
 - Obsidian-style `[[links]]` are parsed for backlink tracking.
 - `typst::Library::default()` requires `use typst::LibraryExt` to be in scope (typst 0.14+).

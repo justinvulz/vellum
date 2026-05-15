@@ -47,9 +47,31 @@ Blank lines that occur inside a multi-line function call or content block are *n
 Each segment is in one of four states:
 
 - **Rendered** — compiled Typst image at 1 egui pt ↔ 1 typst pt. Click to flip into edit mode.
-- **Editing** — monospace `TextEdit` containing the segment's source. A blue accent outline marks the active segment. Focus loss re-splits the buffer and re-renders.
+- **Editing** — monospace `TextEdit` containing the segment's source, syntax-highlighted via `editor::highlight` (see below). A blue accent outline marks the active segment. Focus loss re-splits the buffer and re-renders.
 - **Compile error** — red banner + the typst error message + the raw source. Click the source to edit.
 - **Pending** — `⟳ rendering…` placeholder while the engine compiles.
+
+### Syntax Highlighting
+
+`editor::highlight::highlight` walks Typst's parse tree on every keystroke and produces an `egui::text::LayoutJob` with per-leaf colours. Coloured kinds include math `$` delimiters, `#` markup-to-code transitions, heading markers, comments, strings, numbers, keywords, identifiers, list/enum/term markers, and brackets/punctuation. The palette is configurable through `style::SyntaxColors` (purple `$`, teal `#`, yellow `=…`, etc., inspired by VS Code Dark+).
+
+### Custom Caret
+
+egui 0.27 ties caret height to the galley's row span, so any increase in row height stretches the caret. To keep a font-sized blinking caret while still allowing wide line spacing, `MixedEditor::show_editing` suppresses egui's built-in caret (`visuals_mut().text_cursor.color = TRANSPARENT`) and paints its own:
+
+- Anchored at the row centre, `font_size` points tall.
+- Blinks on a `CARET_BLINK_PERIOD = 0.53s` cycle, with `request_repaint_after` to keep ticking when idle.
+- Glyph spans use `valign: Align::Center` so the caret tracks the text.
+
+### Editor Config
+
+`style::EditorConfig` (exposed as `MixedEditor::config`) collects the per-editor knobs:
+
+- `font_size`, `font_family` — TextEdit font.
+- `line_space: Option<f32>` — extra gap between baselines on top of `font_size`. `None` keeps egui's natural row height; `Some(x)` widens lines.
+- `colors: SyntaxColors` — per-token-kind palette.
+
+Mutate after `MixedEditor::new()` to retheme or resize at runtime; defaults match Typst's body line distance and a dark palette.
 
 ### Preamble Propagation
 
@@ -110,8 +132,11 @@ Each segment is keyed on its fully-wrapped source (theme template + preamble + b
 
 ## Config
 
-- No on-disk config file yet. Tunables live as constants in `src/style.rs`: `UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`, `SANS_FAMILIES`, `EDIT_OUTLINE_COLOR`.
-- External-editor selection: `$TERMINAL` env var overrides the auto-detection order in `external_editor.rs`.
+- No on-disk config file yet. Two layers of in-code tunables:
+  - **Global style** — constants in `src/style.rs`: `UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`, `SANS_FAMILIES`, `EDIT_OUTLINE_COLOR`.
+  - **Per-editor** — `style::EditorConfig` (font, `line_space`, `SyntaxColors`) exposed as `MixedEditor::config`; mutate at runtime to retheme.
+- **Logging**: `RUST_LOG` overrides the default `info,vellum=debug` filter (`env_logger`). Traces cover vault open/scan, note open/save/reload, segment parsing, render bursts, compile errors, file-watcher events, and Helix launches.
+- **External editor**: `$TERMINAL` env var overrides the auto-detection order in `external_editor.rs`.
 
 ## Dependencies
 
@@ -128,6 +153,7 @@ Each segment is keyed on its fully-wrapped source (theme template + preamble + b
 | `regex`            | Wiki-link extraction and content search          |
 | `dirs`             | Resolve `~/vellum` vault path                    |
 | `anyhow`           | Error handling                                   |
+| `log` + `env_logger` | Structured debug tracing                       |
 | `serde/toml`       | (Reserved for future on-disk config)             |
 
 ## Future Work
@@ -137,4 +163,4 @@ Each segment is keyed on its fully-wrapped source (theme template + preamble + b
 - `[[link]]` click-to-navigate in the editor
 - Note rename propagates `[[links]]` across vault
 - On-disk config (vault path, terminal, Helix theme, sizing knobs)
-- Syntax highlighting in the source `TextEdit` when a segment is in edit mode
+- Activity-reset for the caret blink (stay solid for ~500ms after a keystroke)

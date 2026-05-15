@@ -42,6 +42,18 @@ own edit unit without needing blank-line separators.
   `Hello $x$ world`) stays inside a single text segment. Click any rendered
   segment to flip it to a source `TextEdit` with a blue edit outline; click
   outside to re-render.
+- **Syntax-highlighted source view.** When a segment is in edit mode the
+  source is coloured per Typst's syntax tree — `$` math delimiters,
+  `#`-code transitions, heading markers, comments, keywords, numbers,
+  strings, list markers, brackets — re-running on every keystroke. Palette
+  lives in `style::SyntaxColors` and is fully retheme-able.
+- **Configurable edit mode.** `MixedEditor::config` (a `style::EditorConfig`)
+  exposes font size and family, optional extra line spacing
+  (`line_space`), and the syntax-colour palette. Mutate at runtime to
+  retheme the editor.
+- **Custom blinking caret.** A font-sized caret painted by the app
+  (egui 0.27 otherwise ties caret height to row height, so wider lines
+  would stretch the caret). Blinks at ~1 Hz with a wake-up timer.
 - **In-process Typst 0.14.** No external `typst` invocation — the app
   implements `typst::World` and compiles directly.
 - **Preamble propagation.** Leading `#let` / `#import` / `#set` / `#show`
@@ -60,6 +72,9 @@ own edit unit without needing blank-line separators.
 - **Sans-serif by default.** Egui and the Typst theme both resolve to the same
   system sans-serif (Inter / Noto Sans / DejaVu Sans / …), kept identical
   between source `TextEdit`s and rendered output.
+- **Debug tracing.** Structured `log` + `env_logger` traces over vault,
+  note ops, segment parsing, render bursts, compile errors, file-watcher
+  events, and Helix launches; filterable via `RUST_LOG`.
 
 ## Install
 
@@ -118,7 +133,7 @@ move focus) to re-render.
 
 ## Configuration
 
-Most knobs live in `src/style.rs`:
+Global style constants in `src/style.rs`:
 
 | Constant            | Default | Effect                                 |
 |---------------------|---------|----------------------------------------|
@@ -126,9 +141,24 @@ Most knobs live in `src/style.rs`:
 | `EDITOR_PT`         | `20.0`  | Mixed-editor body size                 |
 | `CONTENT_WIDTH_PT`  | `800.0` | Editor column width                    |
 | `SANS_FAMILIES`     | …       | Sans-serif fallback list               |
+| `EDIT_OUTLINE_COLOR`| …       | Blue accent stroke on the active segment |
 
 `UI_PT` and `EDITOR_PT` are decoupled, so the chrome and the editor body can be
 tuned independently.
+
+Per-editor knobs in `style::EditorConfig` (exposed as
+`MixedEditor::config`, mutable at runtime):
+
+```rust
+editor.config.font_size = 18.0;
+editor.config.font_family = egui::FontFamily::Monospace;
+editor.config.line_space = Some(13.0);              // extra gap between lines
+editor.config.colors.dollar = Color32::from_rgb(0xff, 0x00, 0xff);
+```
+
+`SyntaxColors` has fields for every highlighted token kind (`dollar`,
+`hash`, `heading_marker`, `comment`, `string`, `number`, `keyword`,
+`ident`, `punct`, `emphasis`, `list_marker`, `default`).
 
 External-editor selection: set `$TERMINAL` to override the auto-detection in
 `external_editor.rs`. The search order is `alacritty`, `kitty`, `foot`,
@@ -149,7 +179,9 @@ src/
     mod.rs
     segment.rs         syntax-tree splitter (parse_segments)
     preamble.rs        preamble detection + theme-template source wrapping
-    mixed.rs           MixedEditor — per-segment render/edit state machine
+    highlight.rs       Typst syntax highlighter for the source TextEdit
+    mixed.rs           MixedEditor — per-segment render/edit state machine,
+                       custom blinking caret, EditorConfig
     typst_engine.rs    in-process Typst 0.14 compiler, render to texture
   ui/
     mod.rs
