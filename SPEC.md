@@ -1,13 +1,13 @@
 # Vellum — Specification
 
-Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ`) documents stored in a local vault directory. The app provides a mixed inline editor where plain text is edited directly and Typst blocks (math, tables, lists, code) are rendered in-process and editable on click.
+Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ`) documents stored in a local vault directory. The editor splits each note into block-level segments using Typst's syntax tree; every segment compiles in-process and renders as an image, flipping to a source `TextEdit` on click.
 
 ---
 
 ## Goals
 
 - Store notes as plain `.typ` files (human-readable, git-friendly)
-- Mixed inline editing: plain prose editable directly, Typst blocks rendered live
+- Block-level inline editing: every segment renders through Typst and flips to source-edit on click
 - Obsidian-style `[[wiki-links]]` and backlink tracking
 - Minimal UI — egui, no Electron, no browser
 - Helix as optional external editor; the app is self-sufficient for basic editing
@@ -29,36 +29,43 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 
 ## Mixed Inline Editor
 
-The core editing experience is a segment-based mixed editor (`MixedEditor`):
+The core editing experience is a segment-based editor (`MixedEditor`). Every segment compiles through the same Typst pipeline; there is no "plain text" fast path.
 
-### Segment Classification
+### Segment Splitting
 
-Source is split on blank lines into paragraphs. Each paragraph is classified as:
-- **`Typst`**: contains `#` or `$`, or starts with `=` / `-` / `+` / `/`
-- **`Plain`**: everything else
+`editor::segment::parse_segments` walks the top-level children of Typst's `Markup` syntax tree and emits one segment per block-level construct:
+
+- **Heading** (`= Title`) — always its own segment, even without a surrounding blank line.
+- **Block math** (`$ … $` where the body has whitespace immediately inside the dollar signs, per Typst's block-math rule) — own segment.
+- **Top-level `#` code** (`Hash` + following expression — `FuncCall`, `LetBinding`, `SetRule`, `ShowRule`, `ModuleImport`, …) — own segment **when the pair is alone on its source line**. This keeps inline uses like `Hello #strong[bold] world` and `Hello $x$ world` inside one text segment.
+- **Other markup** (text, inline math, list items, inline calls, etc.) accumulates into text segments, separated only by blank lines (top-level `Parbreak`).
+
+Blank lines that occur inside a multi-line function call or content block are *not* segment boundaries — the parser knows they are inner-paragraph breaks, not top-level ones.
 
 ### Editing Behavior
 
-- **Plain segments**: rendered as inline `egui::TextEdit` — edit directly in place
-- **Typst segments (idle)**: rendered as an image via in-process Typst compilation; click to edit
-- **Typst segments (editing)**: shown as a `code_editor` `TextEdit`; focus loss re-parses and re-renders
-- **Compile error**: shows error message + raw source text; click to edit
+Each segment is in one of four states:
+
+- **Rendered** — compiled Typst image at 1 egui pt ↔ 1 typst pt. Click to flip into edit mode.
+- **Editing** — monospace `TextEdit` containing the segment's source. A blue accent outline marks the active segment. Focus loss re-splits the buffer and re-renders.
+- **Compile error** — red banner + the typst error message + the raw source. Click the source to edit.
+- **Pending** — `⟳ rendering…` placeholder while the engine compiles.
 
 ### Preamble Propagation
 
-The first N contiguous Typst segments containing only `#let` / `#import` / `#set` / `#show` / blank / comment lines are the "preamble". The preamble is prepended to every subsequent Typst segment before compilation so that variable bindings and imports are visible across all blocks in the note.
+The leading run of "preamble-only" segments — lines containing only `#let` / `#import` / `#set` / `#show` / `//` comments / blanks — forms the **preamble**. The joined preamble text is prepended to every later segment before compilation so bindings and imports are in scope across all blocks. Detection and source-wrapping live in `editor::preamble`.
 
 ### Render Cache
 
-Rendered textures are cached by *effective source* (preamble + block body). Failed compiles are cached to avoid retrying every frame. The cache is content-addressed, so unchanged blocks survive note reloads.
+Each segment is keyed on its fully-wrapped source (theme template + preamble + body). `MixedEditor` keeps two content-addressed caches: `renders: HashMap<String, TextureHandle>` for successful compiles, and `failed: HashMap<String, String>` for compile errors (so we don't recompile a broken segment every frame). Both survive note reloads because the key is content-based.
 
 ## Typst Engine
 
-- In-process compilation using the `typst` crate (0.14)
-- Each snippet is wrapped: `#import "/asset/theme.typ": template\n#show: template\n\n{snippet}`
-- Fonts: bundled via `typst-assets` (includes New Computer Modern Math) + system fonts via `fontdb`
-- Rendered to `egui::TextureHandle` via `typst-render` at 2× pixel density
-- `comemo::evict(0)` flushes memoization between renders
+- In-process compilation using the `typst` crate (0.14); `TypstEngine` implements `typst::World`.
+- Each snippet body is wrapped by `editor::preamble::wrap_for_render` with the theme template, threading the editor's column width and body size through `template.with(width: …pt, size: …pt)`.
+- Fonts: bundled via `typst-assets` (includes New Computer Modern Math) + system fonts discovered via `fontdb`.
+- Rendered to `egui::TextureHandle` via `typst-render` at 2× pixel density.
+- `comemo::evict(0)` flushes memoization between renders so each frame sees a fresh compile.
 
 ## External Editor (Helix)
 
@@ -74,22 +81,17 @@ Rendered textures are cached by *effective source* (preamble + block body). Fail
 - **Content search**: line-by-line substring scan returning `ContentHit { path, line, snippet }`
 - **Backlinks**: parses `[[link-name]]` from all notes into a `HashMap<String, Vec<PathBuf>>`; shown in backlinks panel for the current note
 
-## Git Sync
-
-- Optional; `GitSync` struct wraps `git init`, `git add -A && git commit`, push/pull
-- Not yet wired to UI; stub is in `src/git.rs`
-
 ## UI Layout
 
 ```
 ┌──────────────────────────────────────────────┐
-│  [sidebar toggle]              [status]       │  ← topbar
+│  [sidebar toggle]              [status]       │  ← topbar (ui::topbar)
 ├──────────┬───────────────────────────────────┤
 │  Vault   │                                   │
 │  Search  │    MixedEditor                    │
-│  ──────  │    Plain segments: inline TextEdit │
-│  Notes   │    Typst segments: rendered image  │
-│          │      └─ click → source TextEdit    │
+│  ──────  │    rendered Typst image            │
+│  Notes   │      └─ click → source TextEdit    │
+│          │            (blue edit outline)     │
 │          ├───────────────────────────────────┤
 │          │   Backlinks panel                 │
 └──────────┴───────────────────────────────────┘
@@ -97,6 +99,7 @@ Rendered textures are cached by *effective source* (preamble + block body). Fail
 
 - Left sidebar is foldable (animated); shows vault tree + search
 - Backlinks panel appears below the editor for the currently open note
+- Editor column is fixed at `CONTENT_WIDTH_PT` (800pt) and centered when the viewport is wider; an outer `ScrollArea` handles horizontal overflow when narrower
 
 ## Key Shortcuts
 
@@ -107,7 +110,8 @@ Rendered textures are cached by *effective source* (preamble + block body). Fail
 
 ## Config
 
-- `~/.config/vellum/config.toml` (parsed by `src/git.rs`; not yet fully used)
+- No on-disk config file yet. Tunables live as constants in `src/style.rs`: `UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`, `SANS_FAMILIES`, `EDIT_OUTLINE_COLOR`.
+- External-editor selection: `$TERMINAL` env var overrides the auto-detection order in `external_editor.rs`.
 
 ## Dependencies
 
@@ -124,13 +128,13 @@ Rendered textures are cached by *effective source* (preamble + block body). Fail
 | `regex`            | Wiki-link extraction and content search          |
 | `dirs`             | Resolve `~/vellum` vault path                    |
 | `anyhow`           | Error handling                                   |
-| `serde/toml`       | Config file parsing                              |
+| `serde/toml`       | (Reserved for future on-disk config)             |
 
 ## Future Work
 
 - Tantivy full-text index (blocked on zstd dependency conflict)
-- Git sync UI (commit/push/pull buttons)
+- Optional git sync (init/commit/push/pull from the UI)
 - `[[link]]` click-to-navigate in the editor
 - Note rename propagates `[[links]]` across vault
-- Config UI for vault path, terminal, Helix theme
-- Syntax highlighting in Typst source `TextEdit` blocks
+- On-disk config (vault path, terminal, Helix theme, sizing knobs)
+- Syntax highlighting in the source `TextEdit` when a segment is in edit mode
