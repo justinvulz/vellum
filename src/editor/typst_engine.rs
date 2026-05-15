@@ -40,11 +40,13 @@ impl TypstEngine {
         db.load_system_fonts();
 
         let mut fonts = Vec::new();
+        let mut bundled = 0usize;
         for data in typst_assets::fonts() {
             let bytes = Bytes::new(data.to_vec());
             let mut i = 0;
             while let Some(font) = Font::new(bytes.clone(), i) {
                 fonts.push(font);
+                bundled += 1;
                 i += 1;
             }
         }
@@ -58,6 +60,13 @@ impl TypstEngine {
                 }
             }
         }
+        log::info!(
+            "typst engine: {} fonts ({} bundled + {} system), root {}",
+            fonts.len(),
+            bundled,
+            fonts.len() - bundled,
+            root.display()
+        );
 
         let book = FontBook::from_fonts(fonts.iter());
         let main_id = FileId::new(None, VirtualPath::new(MAIN_PATH));

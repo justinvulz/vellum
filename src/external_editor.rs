@@ -32,9 +32,13 @@ pub fn open_in_helix(path: &Path) -> Result<()> {
         }
         let mut cmd = Command::new(term);
         cmd.args(pre_args).arg("hx").arg(path);
+        log::info!("helix: launching via {} on {}", term, path.display());
         match cmd.spawn() {
             Ok(_) => return Ok(()),
-            Err(e) => tried.push(format!("{term}: {e}")),
+            Err(e) => {
+                log::warn!("helix: {} failed: {}", term, e);
+                tried.push(format!("{term}: {e}"));
+            }
         }
     }
     Err(anyhow::anyhow!(

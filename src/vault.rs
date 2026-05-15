@@ -20,6 +20,7 @@ pub struct Vault {
 
 impl Vault {
     pub fn open_or_init(root: PathBuf) -> Result<Self> {
+        log::debug!("vault: initialising at {}", root.display());
         ensure_directories(&root)?;
         ensure_manifest(&root)?;
         ensure_theme(&root)?;
@@ -28,6 +29,11 @@ impl Vault {
             notes: Vec::new(),
         };
         vault.rescan();
+        log::info!(
+            "vault ready: {} ({} notes)",
+            vault.root.display(),
+            vault.notes.len()
+        );
         Ok(vault)
     }
 
@@ -41,13 +47,20 @@ impl Vault {
             .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("typ"))
             .collect();
         self.notes.sort();
+        log::debug!("vault rescan: {} notes", self.notes.len());
     }
 
     pub fn read_note(&self, path: &Path) -> Result<String> {
+        log::debug!("vault: read {}", path.display());
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
     }
 
     pub fn write_note(&self, path: &Path, contents: &str) -> Result<()> {
+        log::debug!(
+            "vault: write {} ({} bytes)",
+            path.display(),
+            contents.len()
+        );
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).ok();
         }

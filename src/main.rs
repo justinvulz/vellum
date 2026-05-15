@@ -12,6 +12,14 @@ use app::App;
 use vault::Vault;
 
 fn main() -> Result<()> {
+    // Default: info for everything, debug for the `vellum` crate. Override
+    // with e.g. `RUST_LOG=trace` or `RUST_LOG=vellum::editor=trace`.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,vellum=debug"),
+    )
+    .init();
+    log::info!("vellum starting");
+
     let root = vault::default_vault_dir();
     let vault = Vault::open_or_init(root)?;
 

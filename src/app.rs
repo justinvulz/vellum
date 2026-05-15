@@ -55,6 +55,7 @@ impl App {
     }
 
     fn open_note(&mut self, path: PathBuf) {
+        log::info!("note: open {}", self.vault.display_name(&path));
         if self.mixed.dirty {
             let _ = self.save_current();
         }
@@ -64,7 +65,10 @@ impl App {
                 self.selected = Some(path);
                 self.status = "opened".into();
             }
-            Err(e) => self.status = format!("open failed: {e}"),
+            Err(e) => {
+                log::warn!("note: open failed: {e}");
+                self.status = format!("open failed: {e}");
+            }
         }
     }
 
@@ -72,6 +76,7 @@ impl App {
         let Some(path) = self.selected.clone() else {
             return false;
         };
+        log::info!("note: save {}", self.vault.display_name(&path));
         match self.vault.write_note(&path, &self.mixed.source()) {
             Ok(()) => {
                 self.mixed.dirty = false;
@@ -80,6 +85,7 @@ impl App {
                 true
             }
             Err(e) => {
+                log::warn!("note: save failed: {e}");
                 self.status = format!("save failed: {e}");
                 false
             }
@@ -88,6 +94,7 @@ impl App {
 
     fn reload_current(&mut self) {
         let Some(path) = self.selected.clone() else { return };
+        log::info!("note: reload {}", self.vault.display_name(&path));
         if let Ok(text) = self.vault.read_note(&path) {
             self.mixed.load(&text);
             self.status = "reloaded".into();
@@ -95,12 +102,16 @@ impl App {
     }
 
     fn create_note(&mut self, name: String) {
+        log::info!("note: create {}", name);
         match self.vault.create_note(&name) {
             Ok(path) => {
                 self.open_note(path);
                 self.status = "created".into();
             }
-            Err(e) => self.status = format!("create failed: {e}"),
+            Err(e) => {
+                log::warn!("note: create failed: {e}");
+                self.status = format!("create failed: {e}");
+            }
         }
     }
 
@@ -114,7 +125,10 @@ impl App {
         }
         match crate::external_editor::open_in_helix(&path) {
             Ok(()) => self.status = "opened in Helix".into(),
-            Err(e) => self.status = format!("helix failed: {e}"),
+            Err(e) => {
+                log::warn!("note: helix failed: {e}");
+                self.status = format!("helix failed: {e}");
+            }
         }
     }
 
@@ -145,6 +159,10 @@ impl App {
         if let Some(current) = self.selected.clone() {
             if changes.iter().any(|p| p == &current) && !self.mixed.dirty {
                 if let Ok(text) = self.vault.read_note(&current) {
+                    log::info!(
+                        "note: external reload {}",
+                        self.vault.display_name(&current)
+                    );
                     self.mixed.load(&text);
                     self.status = "external change reloaded".into();
                 }

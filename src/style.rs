@@ -41,6 +41,95 @@ pub fn paint_edit_outline(painter: &egui::Painter, rect: egui::Rect) {
     );
 }
 
+/// Tunables for the source `TextEdit` shown when a segment is in
+/// edit mode. `MixedEditor::config` exposes one instance; modify
+/// fields after `MixedEditor::new()` to retheme or resize.
+#[derive(Clone, Debug)]
+pub struct EditorConfig {
+    /// Font size used both for layout and the caret height.
+    pub font_size: f32,
+    /// Font family for the source view (typically `Monospace`).
+    pub font_family: egui::FontFamily,
+    /// Extra space added between lines, in points. The resulting row
+    /// distance (baseline-to-baseline) is `font_size + line_space`.
+    /// `None` leaves egui's natural row height untouched.
+    ///
+    /// **Caret trade-off**: in egui 0.27 the caret height tracks the
+    /// row span, so any `Some(_)` value that pushes the row above the
+    /// font's natural height also produces a taller caret. The
+    /// default is `None` for a font-sized caret. Opt in to wider
+    /// spacing — e.g. `Some(0.65 × font_size)` to approximate Typst's
+    /// default `par.leading` — when you prefer the spacing match.
+    pub line_space: Option<f32>,
+    /// Per-token-kind colours applied by the syntax highlighter.
+    pub colors: SyntaxColors,
+}
+
+impl Default for EditorConfig {
+    fn default() -> Self {
+        Self {
+            font_size: EDITOR_PT,
+            font_family: egui::FontFamily::Monospace,
+            // 0.65 × font_size mirrors Typst's default `par.leading`.
+            // The caret stays at `font_size` regardless — `MixedEditor`
+            // suppresses egui's full-row caret and paints its own.
+            line_space: Some(EDITOR_PT * 0.65),
+            colors: SyntaxColors::default(),
+        }
+    }
+}
+
+/// Foreground colours for individual Typst syntax-tree leaf kinds.
+/// `editor::highlight` walks the parser's tree and looks each leaf up
+/// here; anything not specifically matched falls back to `default`.
+#[derive(Clone, Debug)]
+pub struct SyntaxColors {
+    pub default: egui::Color32,
+    /// `$` math delimiters.
+    pub dollar: egui::Color32,
+    /// `#` markup-to-code transition.
+    pub hash: egui::Color32,
+    /// `=` / `==` / … heading markers.
+    pub heading_marker: egui::Color32,
+    /// `// …` and `/* … */`.
+    pub comment: egui::Color32,
+    /// `"…"` string literals (in code mode).
+    pub string: egui::Color32,
+    /// Numeric literals (int / float / numeric / bool).
+    pub number: egui::Color32,
+    /// Keywords: `let`, `set`, `show`, `if`, `for`, `import`, …
+    pub keyword: egui::Color32,
+    /// Identifiers in code / math mode.
+    pub ident: egui::Color32,
+    /// Brackets, commas, semicolons.
+    pub punct: egui::Color32,
+    /// `*` and `_` markers (markup emphasis).
+    pub emphasis: egui::Color32,
+    /// `-` / `+` / `/` list / enum / term markers.
+    pub list_marker: egui::Color32,
+}
+
+impl Default for SyntaxColors {
+    fn default() -> Self {
+        // Dark palette inspired by VS Code Dark+, tweaked so the
+        // dollar sign reads as purple per the editor's design.
+        Self {
+            default:        egui::Color32::from_rgb(0xd4, 0xd4, 0xd4),
+            dollar:         egui::Color32::from_rgb(0xc5, 0x86, 0xc0),
+            hash:           egui::Color32::from_rgb(0x4e, 0xc9, 0xb0),
+            heading_marker: egui::Color32::from_rgb(0xdc, 0xdc, 0xaa),
+            comment:        egui::Color32::from_rgb(0x6a, 0x99, 0x55),
+            string:         egui::Color32::from_rgb(0xce, 0x91, 0x78),
+            number:         egui::Color32::from_rgb(0xb5, 0xce, 0xa8),
+            keyword:        egui::Color32::from_rgb(0x56, 0x9c, 0xd6),
+            ident:          egui::Color32::from_rgb(0x9c, 0xdc, 0xfe),
+            punct:          egui::Color32::from_rgb(0x80, 0x80, 0x80),
+            emphasis:       egui::Color32::from_rgb(0xff, 0xd7, 0x00),
+            list_marker:    egui::Color32::from_rgb(0xff, 0x8c, 0x42),
+        }
+    }
+}
+
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 

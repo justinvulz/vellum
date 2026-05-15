@@ -2,10 +2,11 @@
 //! and flips to a source `TextEdit` on click. Headings, math blocks,
 //! function calls, and plain prose all flow through the same pipeline.
 
+use super::highlight;
 use super::preamble;
 use super::segment;
 use super::typst_engine::{TypstEngine, PIXEL_PER_PT};
-use crate::style::{self, CONTENT_WIDTH_PT, EDITOR_PT};
+use crate::style::{self, CONTENT_WIDTH_PT, EditorConfig};
 use std::collections::HashMap;
 
 /// Vertical gap between adjacent segments, in egui points.
@@ -17,6 +18,9 @@ pub struct MixedEditor {
     pub renders: HashMap<String, egui::TextureHandle>,
     pub failed: HashMap<String, String>,
     pub dirty: bool,
+    /// Tunables for the source `TextEdit` shown in edit mode —
+    /// font, line height, syntax colours. Mutate to retheme.
+    pub config: EditorConfig,
     /// Focus to apply on the next frame, once the matching `TextEdit`
     /// exists. Set when the user clicks a rendered segment.
     pending_focus: Option<egui::Id>,
@@ -41,6 +45,7 @@ impl MixedEditor {
             renders: HashMap::new(),
             failed: HashMap::new(),
             dirty: false,
+            config: EditorConfig::default(),
             pending_focus: None,
         }
     }
@@ -52,6 +57,11 @@ impl MixedEditor {
         }
         self.editing_index = None;
         self.dirty = false;
+        log::debug!(
+            "mixed: load {} bytes -> {} segments",
+            source.len(),
+            self.segments.len()
+        );
         // Keep render/failed caches: keys are content-addressed, so
         // unchanged segments keep their textures across reloads.
     }
@@ -121,13 +131,22 @@ impl MixedEditor {
             .cloned()
             .collect();
 
+        if !needed.is_empty() {
+            log::debug!("mixed: rendering {} segment(s)", needed.len());
+        }
+
         for key in needed {
             match engine.render(ctx, &key) {
                 Ok(tex) => {
                     self.renders.insert(key, tex);
                 }
                 Err(e) => {
-                    self.failed.insert(key, format!("{e:#}"));
+                    let msg = format!("{e:#}");
+                    log::warn!(
+                        "typst compile error: {}",
+                        msg.lines().next().unwrap_or(&msg)
+                    );
+                    self.failed.insert(key, msg);
                 }
             }
         }
@@ -140,6 +159,7 @@ impl MixedEditor {
         let prior_text = self
             .editing_index
             .and_then(|i| self.segments.get(i).cloned());
+        let before = self.segments.len();
 
         self.segments = segment::parse_segments(&self.source());
         if self.segments.is_empty() {
@@ -148,6 +168,12 @@ impl MixedEditor {
 
         self.editing_index =
             prior_text.and_then(|t| self.segments.iter().position(|s| s == &t));
+        log::debug!(
+            "mixed: re-parsed {} -> {} segments (editing={:?})",
+            before,
+            self.segments.len(),
+            self.editing_index
+        );
     }
 
     fn apply_frame_state(&mut self, ctx: &egui::Context, state: FrameState) {
@@ -176,7 +202,7 @@ impl MixedEditor {
         let is_editing = state.new_editing == Some(i);
 
         if is_editing {
-            let resp = show_editing(ui, &mut self.segments[i], seg_id);
+            let resp = show_editing(ui, &mut self.segments[i], seg_id, &self.config);
             if resp.changed() {
                 state.any_changed = true;
             }
@@ -208,13 +234,112 @@ fn show_editing(
     ui: &mut egui::Ui,
     text: &mut String,
     seg_id: egui::Id,
+    config: &EditorConfig,
 ) -> egui::Response {
-    ui.add(
-        egui::TextEdit::multiline(text)
-            .id(seg_id)
-            .font(egui::FontId::new(EDITOR_PT, egui::FontFamily::Monospace))
-            .desired_width(CONTENT_WIDTH_PT),
-    )
+    let font_id = egui::FontId::new(config.font_size, config.font_family.clone());
+    // `line_space` is the extra gap on top of `font_size`.
+    let line_height = config
+        .line_space
+        .map(|space| config.font_size + space);
+    // Capture-by-value into the layouter so the closure outlives
+    // the borrow of `config`.
+    let layouter_font = font_id.clone();
+    let colors = config.colors.clone();
+    let mut layouter = move |ui: &egui::Ui, source: &str, wrap_width: f32| {
+        let mut job = highlight::highlight(source, &layouter_font, line_height, &colors);
+        job.wrap.max_width = wrap_width;
+        ui.fonts(|f| f.layout_job(job))
+    };
+
+    // egui 0.27 paints its caret across the full row span — so any
+    // `line_space > 0` would stretch the caret with it. To keep the
+    // caret at `font_size`, we suppress egui's caret here and paint
+    // a manual one below.
+    let real_cursor_stroke = ui.visuals().text_cursor;
+    ui.visuals_mut().text_cursor.color = egui::Color32::TRANSPARENT;
+
+    let output = egui::TextEdit::multiline(text)
+        .id(seg_id)
+        .font(font_id.clone())
+        .desired_width(CONTENT_WIDTH_PT)
+        .desired_rows(1)
+        .margin(egui::Margin { left: 20.0, right: 6.0, top: 10.0, bottom: 2.0 }) 
+        .layouter(&mut layouter)
+        .show(ui);
+
+    ui.visuals_mut().text_cursor = real_cursor_stroke;
+
+    if output.response.has_focus() {
+        if let Some(range) = output.cursor_range {
+            paint_caret(
+                ui,
+                &output.galley,
+                output.galley_pos,
+                &range.primary,
+                &font_id,
+                config.font_size,
+                real_cursor_stroke,
+            );
+        }
+    }
+
+    output.response
+}
+
+/// Seconds per caret blink phase (visible or hidden).
+const CARET_BLINK_PERIOD: f64 = 0.53;
+
+/// Paint a vertical caret `font_size` points tall at the cursor
+/// position, centred vertically within the row. The highlighter
+/// builds spans with `valign: Center`, so the caret sits over the
+/// glyphs regardless of how much `line_space` the user adds.
+///
+/// Blinks at `1 / (2 * CARET_BLINK_PERIOD)` Hz; we request a repaint
+/// at the next phase boundary so the toggle keeps ticking even when
+/// the user is idle.
+fn paint_caret(
+    ui: &egui::Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    cursor: &egui::epaint::text::cursor::Cursor,
+    font_id: &egui::FontId,
+    font_size: f32,
+    stroke: egui::Stroke,
+) {
+    let time = ui.input(|i| i.time);
+    let phase_into = time.rem_euclid(CARET_BLINK_PERIOD * 2.0);
+    let visible = phase_into < CARET_BLINK_PERIOD;
+    let until_next_phase = if visible {
+        CARET_BLINK_PERIOD - phase_into
+    } else {
+        CARET_BLINK_PERIOD * 2.0 - phase_into
+    };
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_secs_f64(until_next_phase));
+
+    if !visible {
+        return;
+    }
+
+    let pos = galley.pos_from_cursor(cursor);
+    let (row_top, row_bottom) = if pos.max.y > pos.min.y {
+        (pos.min.y + galley_pos.y, pos.max.y + galley_pos.y)
+    } else {
+        // Empty galley: `pos_from_cursor` returns a zero-sized rect,
+        // so fall back to the font's natural row height.
+        let h = ui.fonts(|f| f.row_height(font_id));
+        (galley_pos.y, galley_pos.y + h)
+    };
+    let half = font_size / 2.0;
+    let centre = (row_top + row_bottom) / 2.0 - half / 2.0;
+    let x = pos.min.x + galley_pos.x;
+    ui.painter().line_segment(
+        [
+            egui::pos2(x, centre - 1.1 * half),
+            egui::pos2(x, centre + 1.1 * half),
+        ],
+        stroke,
+    );
 }
 
 /// Render the compile-error UI for a segment and return whether the

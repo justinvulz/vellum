@@ -221,6 +221,17 @@ Single test:
 cargo test segment::tests::heading_splits_without_blank_line
 ```
 
+Debug logging is wired through `log` + `env_logger`. The default filter
+is `info,vellum=debug`, so vault state, note open/save, segment counts,
+render bursts, watcher events, and Helix launches appear on stderr.
+Override with `RUST_LOG`:
+
+```sh
+RUST_LOG=trace cargo run                          # everything
+RUST_LOG=vellum::editor=trace,info cargo run      # editor-only trace
+RUST_LOG=warn cargo run                           # quiet — only warnings + errors
+```
+
 Project guidance for AI assistants lives in [CLAUDE.md](./CLAUDE.md).
 
 ## License
