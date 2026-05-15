@@ -88,10 +88,16 @@
 
   
   set list(marker: listal)
-  
+
   set enum(numbering: al("1."))
 
   set math.cases(gap: 1em)
+
+  // Centre tables and grids horizontally on the page. Wraps each
+  // element in `align(center, …)` rather than touching its internal
+  // cell alignment, so per-cell `align:` still works as written.
+  show table: it => align(center, it)
+  show grid: it => align(center, it)
 
   // show math.equation.where(block: false): box
 
