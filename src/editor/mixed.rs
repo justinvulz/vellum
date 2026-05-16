@@ -5,7 +5,7 @@
 use super::highlight;
 use super::preamble;
 use super::segment;
-use super::typst_engine::{TypstEngine, PIXEL_PER_PT};
+use super::typst_engine::{RenderedPage, TypstEngine, PIXEL_PER_PT};
 use crate::style::{self, CONTENT_WIDTH_PT, EditorConfig};
 use std::collections::HashMap;
 
@@ -15,7 +15,7 @@ const SEGMENT_GAP: f32 = 6.0;
 pub struct MixedEditor {
     pub segments: Vec<String>,
     pub editing_index: Option<usize>,
-    pub renders: HashMap<String, egui::TextureHandle>,
+    pub renders: HashMap<String, RenderedPage>,
     pub failed: HashMap<String, String>,
     pub dirty: bool,
     /// Tunables for the source `TextEdit` shown in edit mode —
@@ -24,6 +24,16 @@ pub struct MixedEditor {
     /// Focus to apply on the next frame, once the matching `TextEdit`
     /// exists. Set when the user clicks a rendered segment.
     pending_focus: Option<egui::Id>,
+}
+
+/// What a click on a rendered segment means.
+enum SegmentClick {
+    None,
+    /// Click landed on body — flip the segment to source-edit mode.
+    Edit,
+    /// Click landed on a `vellum://` link rectangle — navigate to the
+    /// named note.
+    Link(String),
 }
 
 /// Scratch state collected during one frame's render pass. The
@@ -70,12 +80,15 @@ impl MixedEditor {
         segment::join(&self.segments)
     }
 
+    /// Returns `Some(name)` when the user clicked a `vellum://`
+    /// link in a rendered segment — the caller is expected to open
+    /// the matching note.
     pub fn show(
         &mut self,
         ctx: &egui::Context,
         ui: &mut egui::Ui,
         engine: &TypstEngine,
-    ) {
+    ) -> Option<String> {
         if self.segments.is_empty() {
             self.segments.push(String::new());
         }
@@ -89,14 +102,20 @@ impl MixedEditor {
             ..Default::default()
         };
 
+        let mut nav: Option<String> = None;
         show_content_column(ui, |ui| {
             for i in 0..self.segments.len() {
-                self.show_segment(ui, i, &effective[i], pending, &mut state);
+                if let Some(target) =
+                    self.show_segment(ui, i, &effective[i], pending, &mut state)
+                {
+                    nav = Some(target);
+                }
                 ui.add_space(SEGMENT_GAP);
             }
         });
 
         self.apply_frame_state(ctx, state);
+        nav
     }
 
     /// Wrapped Typst source per segment (template + preamble + body).
@@ -197,7 +216,7 @@ impl MixedEditor {
         effective_key: &str,
         pending: Option<egui::Id>,
         state: &mut FrameState,
-    ) {
+    ) -> Option<String> {
         let seg_id = egui::Id::new(("mixed-segment", i));
         let is_editing = state.new_editing == Some(i);
 
@@ -219,14 +238,19 @@ impl MixedEditor {
                 state.new_editing = Some(i);
                 state.next_focus = Some(seg_id);
             }
-        } else if let Some(tex) = self.renders.get(effective_key).cloned() {
-            if show_rendered(ui, &tex) {
-                state.new_editing = Some(i);
-                state.next_focus = Some(seg_id);
+        } else if let Some(page) = self.renders.get(effective_key).cloned() {
+            match show_rendered(ui, &page) {
+                SegmentClick::Edit => {
+                    state.new_editing = Some(i);
+                    state.next_focus = Some(seg_id);
+                }
+                SegmentClick::Link(target) => return Some(target),
+                SegmentClick::None => {}
             }
         } else {
             ui.weak("⟳ rendering…");
         }
+        None
     }
 }
 
@@ -359,17 +383,46 @@ fn show_compile_error(ui: &mut egui::Ui, body: &str, err: &str) -> bool {
     .clicked()
 }
 
-/// Render a compiled-Typst texture at 1 egui pt ↔ 1 typst pt. Returns
-/// whether the user clicked, signalling a flip to edit mode.
-fn show_rendered(ui: &mut egui::Ui, tex: &egui::TextureHandle) -> bool {
-    let [w_px, h_px] = tex.size();
+/// Render a compiled-Typst page at 1 egui pt ↔ 1 typst pt and classify
+/// any click against the page's overlaid link rectangles. Clicks on a
+/// link return `SegmentClick::Link(target)`; clicks elsewhere on the
+/// image return `SegmentClick::Edit` (flip to source).
+///
+/// Hit-testing runs in the response's local coordinates rather than
+/// laying down a second `Sense::click()` widget per link — that keeps
+/// the image as a single interaction target and avoids egui z-order
+/// surprises when a link's rectangle straddles a row boundary.
+fn show_rendered(ui: &mut egui::Ui, page: &RenderedPage) -> SegmentClick {
+    let [w_px, h_px] = page.texture.size();
     let size = egui::vec2(w_px as f32 / PIXEL_PER_PT, h_px as f32 / PIXEL_PER_PT);
-    ui.add(
-        egui::Image::new(tex)
+    let resp = ui.add(
+        egui::Image::new(&page.texture)
             .fit_to_exact_size(size)
             .sense(egui::Sense::click()),
-    )
-    .clicked()
+    );
+
+    // Show a pointing-hand cursor while the pointer is over any link
+    // region. Other parts of the image keep the default cursor.
+    if let Some(hover) = resp.hover_pos() {
+        let local = (hover - resp.rect.min).to_pos2();
+        if page.links.iter().any(|l| l.rect.contains(local)) {
+            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+        }
+    }
+
+    if !resp.clicked() {
+        return SegmentClick::None;
+    }
+    let Some(click_pos) = resp.interact_pointer_pos() else {
+        return SegmentClick::Edit;
+    };
+    let local = (click_pos - resp.rect.min).to_pos2();
+    for link in &page.links {
+        if link.rect.contains(local) {
+            return SegmentClick::Link(link.target.clone());
+        }
+    }
+    SegmentClick::Edit
 }
 
 /// Scrollable, centred, fixed-width content column. All segments lay

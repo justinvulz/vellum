@@ -1,3 +1,12 @@
+// Inline link to another note in this vault. The app intercepts URLs
+// with the `vellum://` scheme and opens the matching note.
+//   #line-note("project-a")            -> "project-a"
+//   #line-note("project-a", body: [A]) -> "A"
+#let line-note(name, body: none) = link(
+  "vellum://" + name,
+  text(fill: rgb("#4a9eff"))[#if body == none { name } else { body }],
+)
+
 #let al(itm) = {
   return n => grid(
     columns: (0em, auto),

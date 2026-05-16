@@ -36,9 +36,13 @@ pub fn collect(segments: &[String]) -> (String, usize) {
 
 /// Wrap a snippet body in the theme template, threading the editor's
 /// content width and body size through `template.with(...)`.
+///
+/// `line-note` is co-imported so user code can write `#line-note("X")`
+/// without an explicit `#import`. Clicks on the resulting link are
+/// captured by the app (the URL uses the `vellum://` scheme).
 pub fn wrap_for_render(body: &str) -> String {
     format!(
-        "#import \"/asset/theme.typ\": template\n\
+        "#import \"/asset/theme.typ\": template, line-note\n\
          #show: template.with(width: {CONTENT_WIDTH_PT}pt, size: {EDITOR_PT}pt)\n\
          \n{body}\n"
     )

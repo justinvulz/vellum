@@ -27,7 +27,9 @@ pub fn show(app: &mut App, ctx: &egui::Context, ui: &mut egui::Ui) -> Option<App
     ui.separator();
 
     let App { mixed, engine, .. } = app;
-    mixed.show(ctx, ui, engine);
+    if let Some(target) = mixed.show(ctx, ui, engine) {
+        action = Some(AppAction::OpenNoteByName(target));
+    }
 
     action
 }

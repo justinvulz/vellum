@@ -39,6 +39,22 @@ pub fn backlinks_for<'a>(index: &'a BacklinkIndex, note: &Path) -> Option<&'a Ve
     index.get(&stem)
 }
 
+/// Find a note in the vault whose filename stem matches `name`
+/// (case-insensitively). Used to resolve `#line-note("X")` clicks
+/// and other Obsidian-style name references to a concrete path.
+pub fn find_note_by_stem(vault: &Vault, name: &str) -> Option<PathBuf> {
+    let needle = name.to_ascii_lowercase();
+    vault
+        .notes
+        .iter()
+        .find(|p| {
+            Vault::note_stem(p)
+                .map(|s| s.to_ascii_lowercase() == needle)
+                .unwrap_or(false)
+        })
+        .cloned()
+}
+
 pub fn filename_search(vault: &Vault, query: &str) -> Vec<PathBuf> {
     if query.is_empty() {
         return vault.notes.clone();

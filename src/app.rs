@@ -15,6 +15,9 @@ use std::path::PathBuf;
 
 pub enum AppAction {
     OpenNote(PathBuf),
+    /// Open a note identified by its filename stem
+    /// (e.g. `#line-note("foo")` clicks emit `OpenNoteByName("foo")`).
+    OpenNoteByName(String),
     CreateNote(String),
     SaveCurrent,
     ReloadCurrent,
@@ -115,6 +118,17 @@ impl App {
         }
     }
 
+    fn open_note_by_name(&mut self, name: String) {
+        log::info!("note: follow link to {}", name);
+        match search::find_note_by_stem(&self.vault, &name) {
+            Some(path) => self.open_note(path),
+            None => {
+                log::warn!("note: link target not found: {}", name);
+                self.status = format!("note not found: {name}");
+            }
+        }
+    }
+
     fn open_in_helix(&mut self) {
         let Some(path) = self.selected.clone() else {
             self.status = "no note selected".into();
@@ -135,6 +149,7 @@ impl App {
     fn perform(&mut self, action: AppAction) {
         match action {
             AppAction::OpenNote(p) => self.open_note(p),
+            AppAction::OpenNoteByName(name) => self.open_note_by_name(name),
             AppAction::CreateNote(name) => self.create_note(name),
             AppAction::SaveCurrent => {
                 self.save_current();
