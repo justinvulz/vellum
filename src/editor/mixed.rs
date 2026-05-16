@@ -236,7 +236,7 @@ fn show_editing(
     seg_id: egui::Id,
     config: &EditorConfig,
 ) -> egui::Response {
-    let font_id = egui::FontId::new(0.9* config.font_size, config.font_family.clone());
+    let font_id = egui::FontId::new( 0.8* config.font_size, config.font_family.clone());
     // `line_space` is the extra gap on top of `font_size`.
     let line_height = config
         .line_space
