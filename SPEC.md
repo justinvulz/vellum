@@ -9,6 +9,7 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 - Store notes as plain `.typ` files (human-readable, git-friendly)
 - Block-level inline editing: every segment renders through Typst and flips to source-edit on click
 - Obsidian-style `[[wiki-links]]` and backlink tracking
+- Typst-native inter-note links (`#line-note("name")`) that compile to real Typst `link`s and are click-navigable inside the app
 - Minimal UI — egui, no Electron, no browser
 - Helix as optional external editor; the app is self-sufficient for basic editing
 
@@ -79,14 +80,24 @@ The leading run of "preamble-only" segments — lines containing only `#let` / `
 
 ### Render Cache
 
-Each segment is keyed on its fully-wrapped source (theme template + preamble + body). `MixedEditor` keeps two content-addressed caches: `renders: HashMap<String, TextureHandle>` for successful compiles, and `failed: HashMap<String, String>` for compile errors (so we don't recompile a broken segment every frame). Both survive note reloads because the key is content-based.
+Each segment is keyed on its fully-wrapped source (theme template + preamble + body). `MixedEditor` keeps two content-addressed caches: `renders: HashMap<String, RenderedPage>` for successful compiles (texture + link rectangles), and `failed: HashMap<String, String>` for compile errors (so we don't recompile a broken segment every frame). Both survive note reloads because the key is content-based.
+
+### Inter-note Links
+
+`assets/default_theme.typ` defines `#let line-note(name, body: none) = link("vellum://" + name, …)` and `editor::preamble::wrap_for_render` co-imports it with `template`, so user code can write `#line-note("X")` without an explicit `#import`. The function compiles to a normal Typst `link`, so Typst records both the rectangle and the destination on the page frame.
+
+After each successful compile, `TypstEngine::render` walks `page.frame` recursively (folding group transforms' translation component into the accumulated origin — rotation and scale are ignored, since `line-note` is plain inline text) and returns every `vellum://` link as a `LinkRect { rect: egui::Rect, target: String }` in typst points. 1 typst pt ↔ 1 egui pt by construction, so the rectangles need no scaling when overlaid on the rendered image.
+
+`MixedEditor::show_rendered` hit-tests clicks against those rectangles in the response's local coordinates rather than allocating per-link `Sense::click()` widgets — that keeps the image as a single interaction target and sidesteps egui z-order quirks when a link straddles a row boundary. Matches return `SegmentClick::Link(target)`, which `MixedEditor::show` propagates up as the function's `Option<String>` return value. `ui::editor_view::show` wraps that into `AppAction::OpenNoteByName(name)`; `App::open_note_by_name` resolves it via `search::find_note_by_stem` (case-insensitive stem match) and either opens the note or sets the status line to `note not found: X`.
+
+A pointing-hand cursor (`CursorIcon::PointingHand`) is set whenever the pointer hovers over a link rectangle.
 
 ## Typst Engine
 
 - In-process compilation using the `typst` crate (0.14); `TypstEngine` implements `typst::World`.
 - Each snippet body is wrapped by `editor::preamble::wrap_for_render` with the theme template, threading the editor's column width and body size through `template.with(width: …pt, size: …pt)`.
 - Fonts: bundled via `typst-assets` (includes New Computer Modern Math) + system fonts discovered via `fontdb`.
-- Rendered to `egui::TextureHandle` via `typst-render` at 2× pixel density.
+- Rendered to a `RenderedPage { texture: egui::TextureHandle, links: Vec<LinkRect> }` via `typst-render` at 2× pixel density.
 - `comemo::evict(0)` flushes memoization between renders so each frame sees a fresh compile.
 
 ## External Editor (Helix)

@@ -61,6 +61,12 @@ own edit unit without needing blank-line separators.
   bindings and imports are in scope across the whole note.
 - **Backlinks.** `[[note-name]]` references are indexed; the bottom panel shows
   notes that link to the current one.
+- **Inter-note links.** `#line-note("note-name")` (or
+  `#line-note("note-name", body: [Display label])`) renders an inline blue
+  link in compiled segments. Click to navigate; resolution is a
+  case-insensitive filename-stem match against the vault. The theme defines
+  the function and the preamble auto-imports it, so user code never needs an
+  explicit `#import`.
 - **Filename + content search.** Fuzzy filename match and a regex content
   search over the vault.
 - **External Helix.** `Ctrl+E` launches Helix in your terminal on the current
@@ -203,11 +209,14 @@ Data flow:
    note) and compiled in-process by `TypstEngine`. The render cache is keyed
    on the wrapped source string, so the template, width, size, and preamble
    all participate in invalidation.
-4. Rendered pages become `egui::TextureHandle`s, drawn at `pixels / PIXEL_PER_PT`
-   logical points so 1 typst pt ↔ 1 egui pt on screen.
+4. Rendered pages become `RenderedPage { texture, links }`, where the
+   texture is drawn at `pixels / PIXEL_PER_PT` (1 typst pt ↔ 1 egui pt) and
+   `links` is the set of `vellum://`-scheme link rectangles walked out of
+   the compiled `page.frame`.
 5. Clicking a rendered segment flips it to a monospace source `TextEdit` with
-   a blue edit outline; focus loss re-splits the buffer with the parser and
-   re-renders.
+   a blue edit outline — unless the click landed on a link rectangle, in which
+   case the editor emits `OpenNoteByName(target)` and navigates instead.
+   Focus loss re-splits the buffer with the parser and re-renders.
 6. `Ctrl+S` joins segments back with `\n\n` and writes to disk.
 7. The file watcher notices external writes and reloads the buffer if it
    isn't dirty.
@@ -237,6 +246,24 @@ A blank line *inside* a function call's content block is not a top-level
 whose lines start only with `#let` / `#import` / `#set` / `#show`, `//`
 comments, or are blank. The joined preamble text is prepended to every later
 segment before compilation, so bindings and imports flow through every block.
+
+### Inter-note links
+
+`assets/default_theme.typ` defines `#let line-note(name, body: none) =
+link("vellum://" + name, …)`. `preamble::wrap_for_render` adds it to the
+auto-import alongside `template`, so user code can write `#line-note("X")`
+without an explicit `#import`. The function compiles to a normal Typst
+`link`, so Typst records the rectangle and destination as a
+`FrameItem::Link(Destination::Url, Size)` on the page frame.
+
+After each compile, `TypstEngine::render` walks `page.frame` recursively
+(folding group translations into the accumulated origin) and pulls out every
+`vellum://` link as a `LinkRect { rect, target }` in typst points — which is
+also egui points by construction. `MixedEditor::show_rendered` hit-tests
+clicks against those rectangles in the image's local coordinates; matches
+emit `AppAction::OpenNoteByName(name)`, which `App::open_note_by_name`
+resolves via `search::find_note_by_stem` and opens (or surfaces "note not
+found" in the status line).
 
 ## Development
 
