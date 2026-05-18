@@ -19,12 +19,17 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 
 - Default location: `~/vellum/`
 - Subdirectory structure:
-  - `~/vellum/note/` — all `.typ` note files
+  - `~/vellum/note/` — all `.typ` note files (may be nested in subdirectories)
   - `~/vellum/asset/` — images, theme template, and other shared assets
   - `~/vellum/typst.toml` — Typst package manifest for LSP root resolution
 - `asset/theme.typ` is auto-generated on first run (dark theme template)
-- Recursively scans `note/` for `.typ` files on start and after any file change
-- CRUD: create, read, write, delete, rename notes
+- Recursively scans `note/` for `.typ` files and subdirectories on start and after any file change; populates `notes: Vec<PathBuf>` and `folders: Vec<PathBuf>` (both sorted alphabetically)
+- CRUD:
+  - `create_note(name)` — accepts `"ideas/foo"` to create `note/ideas/foo.typ`; creates missing parent dirs
+  - `delete_note(path)`
+  - `create_folder(name)` — accepts nested paths
+  - `delete_folder(path)` — empty-only (`fs::remove_dir`); recursive removal not exposed for safety
+  - `move_note(from, to_folder)` — `fs::rename`; `to_folder: None` moves to root `note/`
 - `display_name` strips the vault root prefix for display
 - `default_vault_dir()` falls back to `./vellum` if home dir is unavailable
 
@@ -82,15 +87,22 @@ The leading run of "preamble-only" segments — lines containing only `#let` / `
 
 Each segment is keyed on its fully-wrapped source (theme template + preamble + body). `MixedEditor` keeps two content-addressed caches: `renders: HashMap<String, RenderedPage>` for successful compiles (texture + link rectangles), and `failed: HashMap<String, String>` for compile errors (so we don't recompile a broken segment every frame). Both survive note reloads because the key is content-based.
 
+### Progressive Rendering
+
+`ensure_rendered` iterates segments in order and compiles those not yet in cache, but stops after `FRAME_COMPILE_BUDGET_MS` (16 ms) of wall-clock time. Segments not reached in a given frame remain **Pending** (`⟳ rendering…`); `ctx.request_repaint()` is called so the next frame continues where this one stopped. This keeps the UI responsive when opening long notes — segments appear progressively from top to bottom rather than the app freezing until all are compiled.
+
 ### Inter-note Links
 
 `assets/default_theme.typ` defines `#let line-note(name, body: none) = link("vellum://" + name, …)` and `editor::preamble::wrap_for_render` co-imports it with `template`, so user code can write `#line-note("X")` without an explicit `#import`. The function compiles to a normal Typst `link`, so Typst records both the rectangle and the destination on the page frame.
 
 After each successful compile, `TypstEngine::render` walks `page.frame` recursively (folding group transforms' translation component into the accumulated origin — rotation and scale are ignored, since `line-note` is plain inline text) and returns every `vellum://` link as a `LinkRect { rect: egui::Rect, target: String }` in typst points. 1 typst pt ↔ 1 egui pt by construction, so the rectangles need no scaling when overlaid on the rendered image.
 
-`MixedEditor::show_rendered` hit-tests clicks against those rectangles in the response's local coordinates rather than allocating per-link `Sense::click()` widgets — that keeps the image as a single interaction target and sidesteps egui z-order quirks when a link straddles a row boundary. Matches return `SegmentClick::Link(target)`, which `MixedEditor::show` propagates up as the function's `Option<String>` return value. `ui::editor_view::show` wraps that into `AppAction::OpenNoteByName(name)`; `App::open_note_by_name` resolves it via `search::find_note_by_stem` (case-insensitive stem match) and either opens the note or sets the status line to `note not found: X`.
+`MixedEditor::show_rendered` hit-tests clicks against those rectangles in the response's local coordinates rather than allocating per-link `Sense::click()` widgets — that keeps the image as a single interaction target and sidesteps egui z-order quirks when a link straddles a row boundary. Matches return `SegmentClick::Link(target)`, which `MixedEditor::show` propagates up as the function's `Option<String>` return value. `ui::editor_view::show` wraps that into `AppAction::OpenNoteByName(name)`; `App::open_note_by_name` resolves it via `search::find_note_by_stem`:
 
-A pointing-hand cursor (`CursorIcon::PointingHand`) is set whenever the pointer hovers over a link rectangle.
+- If `name` contains `/`, treated as a vault-relative path: `"ideas/foo"` matches `note/ideas/foo.typ` exactly.
+- Otherwise, case-insensitive stem match; first in sorted order wins. Use the path-qualified form when two notes share the same stem in different folders.
+
+Unresolved targets set the status line to `note not found: X`. A pointing-hand cursor (`CursorIcon::PointingHand`) is set whenever the pointer hovers over a link rectangle.
 
 ## Typst Engine
 
@@ -110,9 +122,10 @@ A pointing-hand cursor (`CursorIcon::PointingHand`) is set whenever the pointer 
 
 ## Search
 
-- **Filename search**: case-insensitive substring match on note stems; shown in sidebar
-- **Content search**: line-by-line substring scan returning `ContentHit { path, line, snippet }`
+- **Content search**: line-by-line substring scan returning `ContentHit { path, line, snippet }`; shown below the file tree when a query is active
+- **Tree filter**: the file tree filters notes by stem match and force-opens ancestor folders of matching notes
 - **Backlinks**: parses `[[link-name]]` from all notes into a `HashMap<String, Vec<PathBuf>>`; shown in backlinks panel for the current note
+- **`find_note_by_stem(vault, name)`**: resolves `#line-note` click targets. If `name` contains `/`, matches by vault-relative path (`"ideas/foo"` → `note/ideas/foo.typ`). Otherwise, case-insensitive stem match; first alphabetically wins. Path-qualified form is needed to distinguish between two notes with the same stem in different folders.
 
 ## UI Layout
 
@@ -120,17 +133,25 @@ A pointing-hand cursor (`CursorIcon::PointingHand`) is set whenever the pointer 
 ┌──────────────────────────────────────────────┐
 │  [sidebar toggle]              [status]       │  ← topbar (ui::topbar)
 ├──────────┬───────────────────────────────────┤
-│  Vault   │                                   │
-│  Search  │    MixedEditor                    │
-│  ──────  │    rendered Typst image            │
-│  Notes   │      └─ click → source TextEdit    │
-│          │            (blue edit outline)     │
+│  Vellum  │                                   │
+│  [note…] │    MixedEditor                    │
+│  [fold…] │    rendered Typst image            │
+│  search… │      └─ click → source TextEdit    │
+│  ──────  │            (blue edit outline)     │
+│  ▶ ideas │                                   │
+│    note  │                                   │
+│  note B  │                                   │
 │          ├───────────────────────────────────┤
 │          │   Backlinks panel                 │
 └──────────┴───────────────────────────────────┘
 ```
 
-- Left sidebar is foldable (animated); shows vault tree + search
+- Left sidebar (`ui::vault_explorer`) is foldable (animated); shows a VS Code-style recursive file tree:
+  - Folders render with `▶`/`▼` chevron; clicking anywhere on the row toggles expansion. State stored in egui's ephemeral memory.
+  - Notes are leaf nodes indented one chevron-width deeper than their folder.
+  - Notes use `Sense::click_and_drag()` (via `ui.interact` layered over the `SelectableLabel`) so click-to-open and drag-to-folder both work. A drag-only outer widget would suppress the inner click per egui's hit-tester rules.
+  - Each folder row is a `dnd_drop_zone<PathBuf>`; dropping a note emits `AppAction::MoveNote`. A `📂 (root)` drop zone appears at the top while dragging.
+  - Search filters notes by stem; ancestor folders of matches are force-opened.
 - Backlinks panel appears below the editor for the currently open note
 - Editor column is fixed at `CONTENT_WIDTH_PT` (800pt) and centered when the viewport is wider; an outer `ScrollArea` handles horizontal overflow when narrower
 

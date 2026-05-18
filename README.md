@@ -63,12 +63,19 @@ own edit unit without needing blank-line separators.
   notes that link to the current one.
 - **Inter-note links.** `#line-note("note-name")` (or
   `#line-note("note-name", body: [Display label])`) renders an inline blue
-  link in compiled segments. Click to navigate; resolution is a
-  case-insensitive filename-stem match against the vault. The theme defines
-  the function and the preamble auto-imports it, so user code never needs an
-  explicit `#import`.
-- **Filename + content search.** Fuzzy filename match and a regex content
-  search over the vault.
+  link in compiled segments. Click to navigate. Resolution: if the name
+  contains `/` it matches by vault-relative path (`"ideas/foo"` →
+  `note/ideas/foo.typ`); otherwise a case-insensitive stem match is used
+  (first alphabetically wins). The theme defines the function and the
+  preamble auto-imports it, so user code never needs an explicit `#import`.
+- **Folder organisation.** Notes can live in subdirectories of `note/`.
+  Create folders with the "Folder" input, drag notes onto folder rows to
+  move them, and right-click to delete empty folders.
+- **VS Code-style file tree.** The sidebar shows a recursive tree with
+  `▶`/`▼` chevrons for expand/collapse, depth indentation, and persistent
+  expand state. Ancestor folders of search matches auto-open.
+- **Content search.** Regex content search over the vault; shown below the
+  file tree when a query is active.
 - **External Helix.** `Ctrl+E` launches Helix in your terminal on the current
   file; a file watcher reloads the buffer when Helix writes.
 - **Centered, fixed-width column.** The editor column is 800pt wide. All
@@ -199,16 +206,15 @@ src/
 
 Data flow:
 
-1. `Vault::open_or_init` scans `~/vellum/note/` and rewrites `asset/theme.typ`
-   from the embedded default.
+1. `Vault::open_or_init` scans `~/vellum/note/` recursively, populating
+   `notes` and `folders`, and rewrites `asset/theme.typ` from the embedded default.
 2. Selecting a note loads it into `MixedEditor::load`, which calls
    `segment::parse_segments` to walk Typst's syntax tree and produce a
    `Vec<String>` of block segments.
-3. Each segment is wrapped by `preamble::wrap_for_render` with
-   `#show: template.with(width: 800pt, size: 20pt)` (plus the preamble of the
-   note) and compiled in-process by `TypstEngine`. The render cache is keyed
-   on the wrapped source string, so the template, width, size, and preamble
-   all participate in invalidation.
+3. Each frame, `ensure_rendered` compiles uncached segments up to a 16 ms
+   budget. Segments beyond the budget show `⟳ rendering…` and are compiled
+   on the next repaint — long notes load progressively rather than freezing.
+   The cache is keyed on the fully-wrapped source (template + preamble + body).
 4. Rendered pages become `RenderedPage { texture, links }`, where the
    texture is drawn at `pixels / PIXEL_PER_PT` (1 typst pt ↔ 1 egui pt) and
    `links` is the set of `vellum://`-scheme link rectangles walked out of

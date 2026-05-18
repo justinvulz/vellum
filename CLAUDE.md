@@ -31,7 +31,7 @@ WINIT_UNIX_BACKEND=x11 cargo run
 ## Architecture
 
 - **`app`** — `App` struct, eframe event loop, `AppAction` dispatch, keyboard shortcuts (`shortcut_actions`), file-watcher polling
-- **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; `open_or_init` calls `ensure_directories` / `ensure_manifest` / `ensure_theme`
+- **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; `open_or_init` calls `ensure_directories` / `ensure_manifest` / `ensure_theme`; holds `notes: Vec<PathBuf>` and `folders: Vec<PathBuf>` populated by `rescan`; CRUD: `create_note`, `delete_note`, `create_folder`, `delete_folder`, `move_note(from, to_folder)` (`to_folder: None` moves back to root `note/`)
 - **`editor/`** — editor subsystem:
   - **`segment`** — tree-based splitter; walks `typst::syntax::parse` output and emits one segment per heading / block-math / top-level `#`-code (alone on its line) / text paragraph
   - **`preamble`** — preamble detection (`is_preamble_only`, `collect`) and theme-template source wrapping (`wrap_for_render`)
@@ -40,17 +40,17 @@ WINIT_UNIX_BACKEND=x11 cargo run
   - **`typst_engine`** — in-process Typst 0.14 compiler; implements `typst::World`; bundles fonts via `typst-assets`; `render()` returns a `RenderedPage { texture, links }`, with `links` collected from `FrameItem::Link` entries that use the `vellum://` URL scheme
 - **`external_editor`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`
 - **`file_watcher`** — `FileWatcher` reports external `.typ` changes; `App::poll_watcher` consumes them
-- **`search`** — filename and content search; parses `[[wiki-links]]` for backlinks; `find_note_by_stem(vault, name)` resolves `#line-note` click targets
+- **`search`** — content search; parses `[[wiki-links]]` for backlinks; `find_note_by_stem(vault, name)` resolves `#line-note` click targets — if `name` contains `/` it is treated as a vault-relative path (`"ideas/foo"` → `note/ideas/foo.typ`), otherwise falls back to case-insensitive stem match (first alphabetically wins)
 - **`style`** — fonts, text styles, sizing constants (`UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`), the edit-mode accent outline (`paint_edit_outline`), and the editor config types (`EditorConfig`, `SyntaxColors`)
 - **`ui/`** — egui panels: `topbar`, `vault_explorer`, `editor_view`, `backlinks_panel`
 - **Debug tracing** — `log` + `env_logger` initialised in `main`; default filter `info,vellum=debug`, overridable via `RUST_LOG`
 
 ### Data Flow
 
-1. Vault scan loads `.typ` files from `~/vellum/note/` into the sidebar file tree
+1. Vault scan loads `.typ` files and subdirectories from `~/vellum/note/` into the sidebar file tree
 2. Selecting a note loads its contents into `MixedEditor` via `load(&source)`
 3. `MixedEditor` runs `segment::parse_segments` over the source, producing a `Vec<String>` of block segments
-4. Each segment is wrapped (`preamble::wrap_for_render`) and compiled by `TypstEngine`; the result is a `RenderedPage { texture, links }`, where `links` is every `vellum://` link rectangle walked out of the compiled `page.frame`
+4. Each frame, `ensure_rendered` compiles uncached segments within a 16 ms budget; compiled segments enter the render cache as `RenderedPage { texture, links }`, the rest show `⟳ rendering…` and are compiled on the next repaint
 5. Clicking a rendered segment flips it to a source `TextEdit` (with a blue edit outline) — unless the click landed in a link rectangle, in which case `MixedEditor::show` returns `Some(target)` and `editor_view` emits `OpenNoteByName(target)` instead; focus loss re-splits the buffer
 6. `Ctrl+S` serializes segments back to source (joined with `\n\n`) and writes to disk
 7. File-watcher reports external writes; `App::poll_watcher` reloads the buffer if it is clean
@@ -78,7 +78,7 @@ Because the parser is tree-aware, a blank line *inside* a function call's conten
 
 `TypstEngine::render` walks `page.frame` (folding only the translation component of group transforms — `line-note` is plain inline text, no rotation/scale) and returns each `vellum://` link as a `LinkRect { rect, target }` in typst points. Because we render at `PIXEL_PER_PT = 2.0` but draw back at `pixels / PIXEL_PER_PT`, 1 typst pt ↔ 1 egui pt and the rectangles overlay the image without scaling.
 
-`mixed::show_rendered` hit-tests clicks in the response's local coordinates rather than allocating per-link `Sense::click()` widgets — single interaction target, no z-order surprises when a link rectangle straddles a row boundary. A match returns `SegmentClick::Link(target)`; `MixedEditor::show` propagates that up as `Option<String>`. `ui::editor_view::show` wraps it in `AppAction::OpenNoteByName(name)`; `App::open_note_by_name` resolves via `search::find_note_by_stem` (case-insensitive stem match) and either opens the note or sets `status = "note not found: X"`. The cursor becomes `CursorIcon::PointingHand` while hovering a link rectangle.
+`mixed::show_rendered` hit-tests clicks in the response's local coordinates rather than allocating per-link `Sense::click()` widgets — single interaction target, no z-order surprises when a link rectangle straddles a row boundary. A match returns `SegmentClick::Link(target)`; `MixedEditor::show` propagates that up as `Option<String>`. `ui::editor_view::show` wraps it in `AppAction::OpenNoteByName(name)`; `App::open_note_by_name` resolves via `search::find_note_by_stem` — if the name contains `/` it matches the vault-relative path (e.g. `"ideas/foo"` → `note/ideas/foo.typ`), otherwise it does a case-insensitive stem match. Unresolved targets set `status = "note not found: X"`. The cursor becomes `CursorIcon::PointingHand` while hovering a link rectangle.
 
 ### Segment States
 
@@ -118,21 +118,37 @@ Mutate after `MixedEditor::new()` to retheme at runtime.
 
 `MixedEditor` caches `RenderedPage` values (texture + link rectangles) in `HashMap<String, RenderedPage>` keyed by the *effective source* (preamble + block body). A failed compile is cached in `HashMap<String, String>` to avoid retrying every frame. Both caches are invalidated when the segment text changes (new key); link rectangles are extracted at compile time, so they're cached together with the texture.
 
+### Progressive Rendering
+
+`MixedEditor::ensure_rendered` compiles at most `FRAME_COMPILE_BUDGET_MS` (16 ms) worth of segments per frame. Segments beyond the budget remain in **Pending** state (`⟳ rendering…`) and are compiled on the next repaint via `ctx.request_repaint()`. This keeps the UI responsive when opening long notes — segments load top-to-bottom while the app stays interactive.
+
 ### UI Layout
 
 ```
 ┌──────────────────────────────────────────────┐
 │  [sidebar toggle]              [status]       │  ← topbar (ui::topbar)
 ├──────────┬───────────────────────────────────┤
-│  Vault   │                                   │
-│  Search  │    MixedEditor                    │
-│  ──────  │    rendered Typst image            │
-│  Notes   │      └─ click → source TextEdit    │
-│          │            (blue edit outline)     │
+│  Vellum  │                                   │
+│  [note…] │    MixedEditor                    │
+│  [fold…] │    rendered Typst image            │
+│  search… │      └─ click → source TextEdit    │
+│  ──────  │            (blue edit outline)     │
+│  ▶ ideas │                                   │
+│    note  │                                   │
+│  note B  │                                   │
 │          ├───────────────────────────────────┤
 │          │   Backlinks panel                 │
 └──────────┴───────────────────────────────────┘
 ```
+
+The sidebar is a VS Code-style file tree (`ui::vault_explorer`):
+- Folders show with a `▶`/`▼` chevron; clicking the row toggles expansion. Expand state is stored in egui's per-frame-persistent memory keyed by folder path.
+- Notes are leaf nodes, indented one chevron-width deeper than their parent folder.
+- Folders are rendered first (alphabetical), then notes.
+- Notes have `Sense::click_and_drag()` via a second `ui.interact` call over the label rect. This sidesteps egui's hit-tester rule that drops a click when a drag-only widget sits on top of a click widget at the same rect. `Response::dnd_set_drag_payload` sets the payload on `drag_started()`.
+- Each folder row is wrapped in `ui.dnd_drop_zone::<PathBuf>` — dropping a note emits `AppAction::MoveNote { from, to_folder }`.
+- A `📂 (root)` drop zone appears at the top of the tree only while a note is being dragged, for moving notes back to the root `note/` directory.
+- Search query filters notes by stem; ancestor folders of matching notes are force-opened.
 
 ### External Editor (Helix)
 
