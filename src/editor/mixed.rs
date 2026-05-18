@@ -12,6 +12,12 @@ use std::collections::HashMap;
 /// Vertical gap between adjacent segments, in egui points.
 const SEGMENT_GAP: f32 = 6.0;
 
+/// Maximum wall-clock time (ms) spent compiling Typst segments per
+/// frame. Segments beyond the budget show "⟳ rendering…" and compile
+/// on the next repaint, keeping the UI responsive while a long note
+/// loads progressively.
+const FRAME_COMPILE_BUDGET_MS: u64 = 16;
+
 pub struct MixedEditor {
     pub segments: Vec<String>,
     pub editing_index: Option<usize>,
@@ -142,22 +148,25 @@ impl MixedEditor {
         engine: &TypstEngine,
         effective: &[String],
     ) {
-        let needed: Vec<String> = effective
-            .iter()
-            .filter(|key| {
-                !self.renders.contains_key(*key) && !self.failed.contains_key(*key)
-            })
-            .cloned()
-            .collect();
+        // Compile segments within a per-frame time budget so the UI stays
+        // responsive while a long note is loading. Any segment not reached
+        // this frame stays in Pending state ("⟳ rendering…") and is
+        // compiled on the next repaint.
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(FRAME_COMPILE_BUDGET_MS);
+        let mut any_pending = false;
 
-        if !needed.is_empty() {
-            log::debug!("mixed: rendering {} segment(s)", needed.len());
-        }
-
-        for key in needed {
-            match engine.render(ctx, &key) {
+        for key in effective {
+            if self.renders.contains_key(key) || self.failed.contains_key(key) {
+                continue;
+            }
+            if std::time::Instant::now() >= deadline {
+                any_pending = true;
+                continue;
+            }
+            match engine.render(ctx, key) {
                 Ok(tex) => {
-                    self.renders.insert(key, tex);
+                    self.renders.insert(key.clone(), tex);
                 }
                 Err(e) => {
                     let msg = format!("{e:#}");
@@ -165,9 +174,13 @@ impl MixedEditor {
                         "typst compile error: {}",
                         msg.lines().next().unwrap_or(&msg)
                     );
-                    self.failed.insert(key, msg);
+                    self.failed.insert(key.clone(), msg);
                 }
             }
+        }
+
+        if any_pending {
+            ctx.request_repaint();
         }
     }
 
