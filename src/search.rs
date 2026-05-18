@@ -42,34 +42,36 @@ pub fn backlinks_for<'a>(index: &'a BacklinkIndex, note: &Path) -> Option<&'a Ve
 /// Find a note in the vault whose filename stem matches `name`
 /// (case-insensitively). Used to resolve `#line-note("X")` clicks
 /// and other Obsidian-style name references to a concrete path.
+/// Resolve a link target to a vault note path.
+///
+/// If `name` contains `/` it is treated as a path relative to `note/`
+/// (without the `.typ` extension), so `"ideas/foo"` matches
+/// `note/ideas/foo.typ` unambiguously. Otherwise every note whose
+/// filename stem equals `name` (case-insensitive) is a candidate and
+/// the first match in sorted order wins.
 pub fn find_note_by_stem(vault: &Vault, name: &str) -> Option<PathBuf> {
     let needle = name.to_ascii_lowercase();
-    vault
-        .notes
-        .iter()
-        .find(|p| {
-            Vault::note_stem(p)
-                .map(|s| s.to_ascii_lowercase() == needle)
+    if needle.contains('/') {
+        let notes_dir = vault.root.join("note");
+        vault.notes.iter().find(|p| {
+            p.strip_prefix(&notes_dir)
+                .ok()
+                .map(|rel| {
+                    rel.with_extension("").to_string_lossy().to_ascii_lowercase() == needle
+                })
                 .unwrap_or(false)
-        })
-        .cloned()
-}
-
-pub fn filename_search(vault: &Vault, query: &str) -> Vec<PathBuf> {
-    if query.is_empty() {
-        return vault.notes.clone();
+        }).cloned()
+    } else {
+        vault
+            .notes
+            .iter()
+            .find(|p| {
+                Vault::note_stem(p)
+                    .map(|s| s.to_ascii_lowercase() == needle)
+                    .unwrap_or(false)
+            })
+            .cloned()
     }
-    let q = query.to_ascii_lowercase();
-    vault
-        .notes
-        .iter()
-        .filter(|p| {
-            Vault::note_stem(p)
-                .map(|s| s.to_ascii_lowercase().contains(&q))
-                .unwrap_or(false)
-        })
-        .cloned()
-        .collect()
 }
 
 pub struct ContentHit {

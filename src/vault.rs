@@ -118,6 +118,46 @@ impl Vault {
         Ok(())
     }
 
+    /// Move a note into `to_folder` (an absolute path under `note/`),
+    /// or back to the root `note/` directory when `None`. Fails if a
+    /// file with the same name already exists at the destination.
+    /// Returns the note's new path.
+    pub fn move_note(
+        &mut self,
+        from: &Path,
+        to_folder: Option<&Path>,
+    ) -> Result<PathBuf> {
+        log::debug!(
+            "vault: move {} → {}",
+            from.display(),
+            to_folder
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "(root)".into())
+        );
+        let file_name = from
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("source has no filename: {}", from.display()))?;
+        let dest_dir = to_folder
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root.join("note"));
+        let dest = dest_dir.join(file_name);
+        if dest == from {
+            return Ok(dest);
+        }
+        if dest.exists() {
+            return Err(anyhow::anyhow!(
+                "destination already exists: {}",
+                dest.display()
+            ));
+        }
+        fs::create_dir_all(&dest_dir)
+            .with_context(|| format!("creating {}", dest_dir.display()))?;
+        fs::rename(from, &dest)
+            .with_context(|| format!("moving {} to {}", from.display(), dest.display()))?;
+        self.rescan();
+        Ok(dest)
+    }
+
     /// Create an empty subfolder under `note/`. `name` may include `/`
     /// to nest folders. Fails if the path already exists.
     pub fn create_folder(&mut self, name: &str) -> Result<PathBuf> {

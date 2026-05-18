@@ -22,6 +22,12 @@ pub enum AppAction {
     DeleteNote(PathBuf),
     CreateFolder(String),
     DeleteFolder(PathBuf),
+    /// Move a note into a folder, or back to the root `note/` dir
+    /// when `to_folder` is `None`.
+    MoveNote {
+        from: PathBuf,
+        to_folder: Option<PathBuf>,
+    },
     SaveCurrent,
     ReloadCurrent,
     OpenInHelix,
@@ -152,6 +158,30 @@ impl App {
         }
     }
 
+    fn move_note(&mut self, from: PathBuf, to_folder: Option<PathBuf>) {
+        log::info!(
+            "note: move {} → {}",
+            self.vault.display_name(&from),
+            to_folder
+                .as_ref()
+                .map(|p| self.vault.display_name(p))
+                .unwrap_or_else(|| "(root)".into())
+        );
+        match self.vault.move_note(&from, to_folder.as_deref()) {
+            Ok(new_path) => {
+                if self.selected.as_ref() == Some(&from) {
+                    self.selected = Some(new_path);
+                }
+                self.backlinks = search::build_backlinks(&self.vault);
+                self.status = "moved".into();
+            }
+            Err(e) => {
+                log::warn!("note: move failed: {e}");
+                self.status = format!("move failed: {e}");
+            }
+        }
+    }
+
     fn delete_folder(&mut self, path: PathBuf) {
         log::info!("folder: delete {}", self.vault.display_name(&path));
         match self.vault.delete_folder(&path) {
@@ -199,6 +229,7 @@ impl App {
             AppAction::DeleteNote(p) => self.delete_note(p),
             AppAction::CreateFolder(name) => self.create_folder(name),
             AppAction::DeleteFolder(p) => self.delete_folder(p),
+            AppAction::MoveNote { from, to_folder } => self.move_note(from, to_folder),
             AppAction::SaveCurrent => {
                 self.save_current();
             }
