@@ -21,7 +21,6 @@ cargo build
 cargo run
 cargo test
 cargo test <test_name>   # run a single test
-cargo clippy
 ```
 
 If running on a system where Wayland libs are missing, set:

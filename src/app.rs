@@ -19,6 +19,9 @@ pub enum AppAction {
     /// (e.g. `#line-note("foo")` clicks emit `OpenNoteByName("foo")`).
     OpenNoteByName(String),
     CreateNote(String),
+    DeleteNote(PathBuf),
+    CreateFolder(String),
+    DeleteFolder(PathBuf),
     SaveCurrent,
     ReloadCurrent,
     OpenInHelix,
@@ -30,6 +33,7 @@ pub struct App {
     pub mixed: MixedEditor,
     pub engine: TypstEngine,
     pub new_note_name: String,
+    pub new_folder_name: String,
     pub search_query: String,
     pub backlinks: BacklinkIndex,
     pub sidebar_open: bool,
@@ -49,6 +53,7 @@ impl App {
             mixed: MixedEditor::new(),
             engine,
             new_note_name: String::new(),
+            new_folder_name: String::new(),
             search_query: String::new(),
             backlinks,
             sidebar_open: true,
@@ -118,6 +123,46 @@ impl App {
         }
     }
 
+    fn delete_note(&mut self, path: PathBuf) {
+        log::info!("note: delete {}", self.vault.display_name(&path));
+        match self.vault.delete_note(&path) {
+            Ok(()) => {
+                if self.selected.as_ref() == Some(&path) {
+                    self.selected = None;
+                    self.mixed.load("");
+                }
+                self.backlinks = search::build_backlinks(&self.vault);
+                self.status = "deleted".into();
+            }
+            Err(e) => {
+                log::warn!("note: delete failed: {e}");
+                self.status = format!("delete failed: {e}");
+            }
+        }
+    }
+
+    fn create_folder(&mut self, name: String) {
+        log::info!("folder: create {}", name);
+        match self.vault.create_folder(&name) {
+            Ok(_) => self.status = "folder created".into(),
+            Err(e) => {
+                log::warn!("folder: create failed: {e}");
+                self.status = format!("folder create failed: {e}");
+            }
+        }
+    }
+
+    fn delete_folder(&mut self, path: PathBuf) {
+        log::info!("folder: delete {}", self.vault.display_name(&path));
+        match self.vault.delete_folder(&path) {
+            Ok(()) => self.status = "folder deleted".into(),
+            Err(e) => {
+                log::warn!("folder: delete failed: {e}");
+                self.status = format!("folder delete failed: {e}");
+            }
+        }
+    }
+
     fn open_note_by_name(&mut self, name: String) {
         log::info!("note: follow link to {}", name);
         match search::find_note_by_stem(&self.vault, &name) {
@@ -151,6 +196,9 @@ impl App {
             AppAction::OpenNote(p) => self.open_note(p),
             AppAction::OpenNoteByName(name) => self.open_note_by_name(name),
             AppAction::CreateNote(name) => self.create_note(name),
+            AppAction::DeleteNote(p) => self.delete_note(p),
+            AppAction::CreateFolder(name) => self.create_folder(name),
+            AppAction::DeleteFolder(p) => self.delete_folder(p),
             AppAction::SaveCurrent => {
                 self.save_current();
             }
