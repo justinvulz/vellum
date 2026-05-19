@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<svg width="680" height="420" xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg">
+ <title>Vellum logo</title>
+
+ <desc>Stacked parchment sheets with V mark, no circle</desc>
+ <!-- Stacked parchment layers -->
+ <!-- Fold crease corner -->
+ <!-- V mark directly on parchment -->
+ <!-- Green accent dot -->
+ <g class="layer">
+  <title>Layer 1</title>
+  <rect fill="rgb(212, 196, 154)" height="135" id="svg_1" rx="2" stroke="rgb(200, 180, 130)" stroke-width="1px" width="110" x="285" y="165"/>
+  <rect fill="rgb(221, 208, 168)" height="135" id="svg_2" rx="2" stroke="rgb(200, 180, 130)" stroke-width="1px" width="110" x="278" y="155"/>
+  <rect fill="rgb(237, 224, 188)" height="135" id="svg_3" rx="3" stroke="rgb(200, 180, 130)" stroke-width="1.5px" width="110" x="270" y="144"/>
+  <polygon fill="rgb(212, 196, 154)" id="svg_" opacity="0.6" points="161.81818389892578,134 211.81818389892578,134 161.81818389892578,184" stroke-width="1px" transform="matrix(1, 0, 0, 1, 108.636, 10.4545)"/>
+  <polygon fill="rgb(61, 46, 30)" id="svg_6" points="325,175 308,228 316,228 325,203 334,228 342,228 325,175" stroke-width="1px"/>
+  <circle cx="325" cy="235" fill="rgb(107, 158, 128)" id="svg_7" r="4" stroke-width="1px"/>
+ </g>
+</svg>
