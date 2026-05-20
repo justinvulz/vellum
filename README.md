@@ -81,4 +81,4 @@ Architecture and implementation notes live in [CLAUDE.md](./CLAUDE.md).
 
 ## License
 
-Not yet declared.
+GPL-3.0. See [LICENSE](./LICENSE).
