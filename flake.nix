@@ -14,7 +14,7 @@
       runtimeLibs = with pkgs; [
         wayland
         libxkbcommon
-        libGL
+        vulkan-loader
         fontconfig
         # X11 fallback (used when WINIT_UNIX_BACKEND=x11)
         libX11
@@ -26,7 +26,7 @@
 
       vellum = pkgs.rustPlatform.buildRustPackage {
         pname = "vellum";
-        version = "0.1.0";
+        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
 
@@ -45,6 +45,7 @@
 
         meta = with pkgs.lib; {
           description = "Typst-native desktop note-taking app";
+          license = licenses.gpl3Only;
           mainProgram = "vellum";
           platforms = platforms.linux;
         };
@@ -61,6 +62,35 @@
         program = "${vellum}/bin/vellum";
       };
 
+      # Overlay for use in nixpkgs-based configs.
+      overlays.default = _final: _prev: { inherit vellum; };
+
+      # NixOS module for declarative installation.
+      nixosModules.default =
+        { config, lib, pkgs, ... }:
+        {
+          options.programs.vellum.enable = lib.mkEnableOption "Vellum Typst note-taking app";
+
+          config = lib.mkIf config.programs.vellum.enable {
+            environment.systemPackages = [
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default
+            ];
+          };
+        };
+
+      # Home Manager module for per-user installation.
+      homeManagerModules.default =
+        { config, lib, pkgs, ... }:
+        {
+          options.programs.vellum.enable = lib.mkEnableOption "Vellum Typst note-taking app";
+
+          config = lib.mkIf config.programs.vellum.enable {
+            home.packages = [
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default
+            ];
+          };
+        };
+
       devShells.${system}.default = pkgs.mkShell {
         packages =
           with pkgs;
@@ -71,6 +101,7 @@
             pkg-config
             typst
             xdg-utils
+            gh
           ]
           ++ runtimeLibs;
 

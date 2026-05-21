@@ -30,6 +30,9 @@ pub struct MixedEditor {
     /// Focus to apply on the next frame, once the matching `TextEdit`
     /// exists. Set when the user clicks a rendered segment.
     pending_focus: Option<egui::Id>,
+    /// `ui.input().time` of the last keystroke in any segment. Used to
+    /// hold the caret solid while the user is actively typing.
+    last_typed: f64,
 }
 
 /// What a click on a rendered segment means.
@@ -63,11 +66,13 @@ impl MixedEditor {
             dirty: false,
             config: EditorConfig::default(),
             pending_focus: None,
+            last_typed: f64::NEG_INFINITY,
         }
     }
 
     pub fn load(&mut self, source: &str) {
         self.segments = segment::parse_segments(source);
+        preamble::merge_leading(&mut self.segments);
         if self.segments.is_empty() {
             self.segments.push(String::new());
         }
@@ -194,6 +199,7 @@ impl MixedEditor {
         let before = self.segments.len();
 
         self.segments = segment::parse_segments(&self.source());
+        preamble::merge_leading(&mut self.segments);
         if self.segments.is_empty() {
             self.segments.push(String::new());
         }
@@ -234,9 +240,16 @@ impl MixedEditor {
         let is_editing = state.new_editing == Some(i);
 
         if is_editing {
-            let resp = show_editing(ui, &mut self.segments[i], seg_id, &self.config);
+            let resp = show_editing(
+                ui,
+                &mut self.segments[i],
+                seg_id,
+                &self.config,
+                self.last_typed,
+            );
             if resp.changed() {
                 state.any_changed = true;
+                self.last_typed = ui.input(|i| i.time);
             }
             if resp.lost_focus() {
                 state.new_editing = None;
@@ -267,17 +280,24 @@ impl MixedEditor {
     }
 }
 
+/// How long after the last keystroke to hold the caret solid before
+/// the blink cycle resumes.
+const CARET_TYPING_HOLD: f64 = 0.5;
+
 fn show_editing(
     ui: &mut egui::Ui,
     text: &mut String,
     seg_id: egui::Id,
     config: &EditorConfig,
+    last_typed: f64,
 ) -> egui::Response {
-    let font_id = egui::FontId::new( 0.8* config.font_size, config.font_family.clone());
+    let reduce_font_size = 0.8* config.font_size;
+
+    let font_id = egui::FontId::new( reduce_font_size, config.font_family.clone());
     // `line_space` is the extra gap on top of `font_size`.
     let line_height = config
         .line_space
-        .map(|space| config.font_size + space);
+        .map(|space| reduce_font_size + space);
     // Capture-by-value into the layouter so the closure outlives
     // the borrow of `config`.
     let layouter_font = font_id.clone();
@@ -300,7 +320,12 @@ fn show_editing(
         .font(font_id.clone())
         .desired_width(CONTENT_WIDTH_PT)
         .desired_rows(1)
-        .margin(egui::Margin { left: 20.0, right: 6.0, top: 10.0, bottom: 2.0 }) 
+        .margin(egui::Margin {
+            left: 20.0,
+            right: 6.0,
+            top: line_height.unwrap_or(reduce_font_size) - reduce_font_size,
+            bottom: 0.1* reduce_font_size,
+        })
         .layouter(&mut layouter)
         .show(ui);
 
@@ -314,8 +339,9 @@ fn show_editing(
                 output.galley_pos,
                 &range.primary,
                 &font_id,
-                config.font_size,
+                reduce_font_size,
                 real_cursor_stroke,
+                last_typed,
             );
         }
     }
@@ -342,14 +368,23 @@ fn paint_caret(
     font_id: &egui::FontId,
     font_size: f32,
     stroke: egui::Stroke,
+    last_typed: f64,
 ) {
     let time = ui.input(|i| i.time);
-    let phase_into = time.rem_euclid(CARET_BLINK_PERIOD * 2.0);
-    let visible = phase_into < CARET_BLINK_PERIOD;
-    let until_next_phase = if visible {
-        CARET_BLINK_PERIOD - phase_into
+    let since_typed = time - last_typed;
+    let (visible, until_next_phase) = if since_typed < CARET_TYPING_HOLD {
+        // Hold solid while the user is actively typing, then resume
+        // blinking from the start of a visible phase.
+        (true, CARET_TYPING_HOLD - since_typed)
     } else {
-        CARET_BLINK_PERIOD * 2.0 - phase_into
+        let phase_into = time.rem_euclid(CARET_BLINK_PERIOD * 2.0);
+        let visible = phase_into < CARET_BLINK_PERIOD;
+        let until_next = if visible {
+            CARET_BLINK_PERIOD - phase_into
+        } else {
+            CARET_BLINK_PERIOD * 2.0 - phase_into
+        };
+        (visible, until_next)
     };
     ui.ctx()
         .request_repaint_after(std::time::Duration::from_secs_f64(until_next_phase));
@@ -359,7 +394,7 @@ fn paint_caret(
     }
 
     let pos = galley.pos_from_cursor(cursor);
-    let (row_top, row_bottom) = if pos.max.y > pos.min.y {
+    let (row_top, _row_bottom) = if pos.max.y > pos.min.y {
         (pos.min.y + galley_pos.y, pos.max.y + galley_pos.y)
     } else {
         // Empty galley: `pos_from_cursor` returns a zero-sized rect,
@@ -367,13 +402,11 @@ fn paint_caret(
         let h = ui.fonts(|f| f.row_height(font_id));
         (galley_pos.y, galley_pos.y + h)
     };
-    let half = font_size / 2.0;
-    let centre = (row_top + row_bottom) / 2.0 - half / 2.0;
     let x = pos.min.x + galley_pos.x;
     ui.painter().line_segment(
         [
-            egui::pos2(x, centre - 1.1 * half),
-            egui::pos2(x, centre + 1.1 * half),
+            egui::pos2(x, row_top),
+            egui::pos2(x, row_top + font_size*1.1),
         ],
         stroke,
     );

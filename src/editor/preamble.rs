@@ -34,6 +34,22 @@ pub fn collect(segments: &[String]) -> (String, usize) {
     (segments[..count].join("\n\n"), count)
 }
 
+/// Collapse the leading run of preamble-only segments into a single
+/// segment so the user clicks once to edit the whole preamble instead
+/// of jumping between every `#let` / `#import` / `#set` / `#show`.
+/// Only runs when there are 2+ leading preamble segments — a single
+/// preamble segment is already one click.
+pub fn merge_leading(segments: &mut Vec<String>) {
+    let count = segments
+        .iter()
+        .take_while(|s| is_preamble_only(s))
+        .count();
+    if count >= 2 {
+        let merged = segments[..count].join("\n\n");
+        segments.splice(0..count, std::iter::once(merged));
+    }
+}
+
 /// Wrap a snippet body in the theme template, threading the editor's
 /// content width and body size through `template.with(...)`.
 ///
