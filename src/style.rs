@@ -36,8 +36,9 @@ pub const EDIT_OUTLINE_COLOR: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x9e
 pub fn paint_edit_outline(painter: &egui::Painter, rect: egui::Rect) {
     painter.rect_stroke(
         rect.expand(3.0),
-        egui::Rounding::same(4.0),
+        egui::CornerRadius::same(4),
         egui::Stroke::new(1.5, EDIT_OUTLINE_COLOR),
+        egui::StrokeKind::Outside,
     );
 }
 
@@ -156,7 +157,7 @@ pub fn install(ctx: &egui::Context) {
         let key = format!("sans-{family}");
         fonts
             .font_data
-            .insert(key.clone(), egui::FontData::from_owned(data));
+            .insert(key.clone(), egui::FontData::from_owned(data).into());
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
@@ -168,7 +169,7 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 
     use egui::{FontFamily, FontId, TextStyle};
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.text_styles.insert(
         TextStyle::Heading,
         FontId::new(UI_PT * 1.4, FontFamily::Proportional),
@@ -189,5 +190,5 @@ pub fn install(ctx: &egui::Context) {
         TextStyle::Small,
         FontId::new((UI_PT - 2.0).max(10.0), FontFamily::Proportional),
     );
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }

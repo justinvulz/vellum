@@ -41,7 +41,7 @@ fn main() -> Result<()> {
             visuals.extreme_bg_color = bg;
             cc.egui_ctx.set_visuals(visuals);
             style::install(&cc.egui_ctx);
-            Box::new(App::new(vault))
+            Ok(Box::new(App::new(vault)))
         }),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;

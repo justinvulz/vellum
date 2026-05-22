@@ -12,6 +12,11 @@ use std::collections::HashMap;
 /// Vertical gap between adjacent segments, in egui points.
 const SEGMENT_GAP: f32 = 6.0;
 
+/// Top padding above the first segment, in egui points. Keeps the
+/// initial heading off the panel separator so the editor doesn't feel
+/// crammed against the top toolbar.
+const TOP_PADDING: f32 = 24.0;
+
 /// Maximum wall-clock time (ms) spent compiling Typst segments per
 /// frame. Segments beyond the budget show "⟳ rendering…" and compile
 /// on the next repaint, keeping the UI responsive while a long note
@@ -115,6 +120,7 @@ impl MixedEditor {
 
         let mut nav: Option<String> = None;
         show_content_column(ui, |ui| {
+            ui.add_space(TOP_PADDING);
             for i in 0..self.segments.len() {
                 if let Some(target) =
                     self.show_segment(ui, i, &effective[i], pending, &mut state)
@@ -291,53 +297,65 @@ fn show_editing(
     config: &EditorConfig,
     last_typed: f64,
 ) -> egui::Response {
-    let reduce_font_size = 0.8* config.font_size;
+    let reduce_font_size = 0.8 * config.font_size;
 
-    let font_id = egui::FontId::new( reduce_font_size, config.font_family.clone());
+    let font_id = egui::FontId::new(reduce_font_size, config.font_family.clone());
     // `line_space` is the extra gap on top of `font_size`.
-    let line_height = config
-        .line_space
-        .map(|space| reduce_font_size + space);
+    let line_height = config.line_space.map(|space| reduce_font_size + space);
     // Capture-by-value into the layouter so the closure outlives
     // the borrow of `config`.
     let layouter_font = font_id.clone();
     let colors = config.colors.clone();
-    let mut layouter = move |ui: &egui::Ui, source: &str, wrap_width: f32| {
-        let mut job = highlight::highlight(source, &layouter_font, line_height, &colors);
+    let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+        let mut job = highlight::highlight(buf.as_str(), &layouter_font, line_height, &colors);
         job.wrap.max_width = wrap_width;
-        ui.fonts(|f| f.layout_job(job))
+        ui.fonts_mut(|f| f.layout_job(job))
     };
 
-    // egui 0.27 paints its caret across the full row span — so any
+    // egui paints its caret across the full row span — so any
     // `line_space > 0` would stretch the caret with it. To keep the
     // caret at `font_size`, we suppress egui's caret here and paint
     // a manual one below.
-    let real_cursor_stroke = ui.visuals().text_cursor;
-    ui.visuals_mut().text_cursor.color = egui::Color32::TRANSPARENT;
+    let real_cursor_stroke = ui.visuals().text_cursor.stroke;
+    ui.visuals_mut().text_cursor.stroke.color = egui::Color32::TRANSPARENT;
 
+    let top_margin = (line_height.unwrap_or(reduce_font_size) - reduce_font_size)
+        .round() as i8;
+    let bottom_margin = (0.1 * reduce_font_size).round() as i8;
+    let inner_margin = egui::Margin {
+        left: 20,
+        right: 6,
+        top: top_margin,
+        bottom: bottom_margin,
+    };
+
+    // egui 0.34's default `TextEdit` frame paints a stroke (the
+    // widget's `bg_stroke` when blurred, `selection.stroke` when
+    // focused). On top of that we paint our blue edit outline — two
+    // strokes around the same widget. Supplying a custom `Frame::NONE`
+    // makes `TextEdit::show` keep the frame untouched (no fill, no
+    // stroke), so only `style::paint_edit_outline` draws around the
+    // segment.
     let output = egui::TextEdit::multiline(text)
         .id(seg_id)
         .font(font_id.clone())
         .desired_width(CONTENT_WIDTH_PT)
         .desired_rows(1)
-        .margin(egui::Margin {
-            left: 20.0,
-            right: 6.0,
-            top: line_height.unwrap_or(reduce_font_size) - reduce_font_size,
-            bottom: 0.1* reduce_font_size,
-        })
+        .frame(egui::Frame::NONE.inner_margin(inner_margin))
+        .margin(inner_margin)
         .layouter(&mut layouter)
         .show(ui);
 
-    ui.visuals_mut().text_cursor = real_cursor_stroke;
+    ui.visuals_mut().text_cursor.stroke = real_cursor_stroke;
 
-    if output.response.has_focus() {
+    let response = output.response.response;
+    if response.has_focus() {
         if let Some(range) = output.cursor_range {
             paint_caret(
                 ui,
                 &output.galley,
                 output.galley_pos,
-                &range.primary,
+                range.primary,
                 &font_id,
                 reduce_font_size,
                 real_cursor_stroke,
@@ -346,7 +364,7 @@ fn show_editing(
         }
     }
 
-    output.response
+    response
 }
 
 /// Seconds per caret blink phase (visible or hidden).
@@ -364,7 +382,7 @@ fn paint_caret(
     ui: &egui::Ui,
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
-    cursor: &egui::epaint::text::cursor::Cursor,
+    cursor: egui::epaint::text::cursor::CCursor,
     font_id: &egui::FontId,
     font_size: f32,
     stroke: egui::Stroke,
@@ -399,7 +417,7 @@ fn paint_caret(
     } else {
         // Empty galley: `pos_from_cursor` returns a zero-sized rect,
         // so fall back to the font's natural row height.
-        let h = ui.fonts(|f| f.row_height(font_id));
+        let h = ui.fonts_mut(|f| f.row_height(font_id));
         (galley_pos.y, galley_pos.y + h)
     };
     let x = pos.min.x + galley_pos.x;
@@ -420,7 +438,7 @@ fn show_compile_error(ui: &mut egui::Ui, body: &str, err: &str) -> bool {
         "compile error (click to edit source)",
     );
     ui.add(
-        egui::Label::new(egui::RichText::new(err).monospace().small()).wrap(true),
+        egui::Label::new(egui::RichText::new(err).monospace().small()).wrap(),
     );
     ui.add(
         egui::Label::new(egui::RichText::new(body).monospace())
@@ -477,7 +495,7 @@ fn show_rendered(ui: &mut egui::Ui, page: &RenderedPage) -> SegmentClick {
 /// viewport is narrower than `CONTENT_WIDTH_PT`.
 fn show_content_column(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
     egui::ScrollArea::both()
-        .id_source("mixed-scroll")
+        .id_salt("mixed-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let padding = ((ui.available_width() - CONTENT_WIDTH_PT) / 2.0).max(0.0);

@@ -1,13 +1,22 @@
+//! Sidebar file tree, search, and create / delete / move actions.
+//!
+//! The tree itself is rendered by [`egui_ltreeview`]; this module shapes
+//! the vault into the tree, translates the tree's `Action` values into
+//! `AppAction`s, and threads search-driven force-open and content-match
+//! results around it.
+
 use crate::app::{App, AppAction};
 use crate::search;
+use egui_ltreeview::{Action, NodeBuilder, TreeView, TreeViewState};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
-    let mut action = None;
+    let mut action: Option<AppAction> = None;
 
-    ui.add(egui::Label::new(egui::RichText::new("Vellum").heading()).truncate(true));
-    ui.add(egui::Label::new(app.vault.root.display().to_string()).truncate(true));
+    ui.add(egui::Label::new(egui::RichText::new("Vellum").heading()).truncate());
+    ui.add(egui::Label::new(app.vault.root.display().to_string()).truncate());
     ui.separator();
 
     let narrow = ui.available_width() < 140.0;
@@ -39,7 +48,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
             .hint_text("search…")
             .desired_width(f32::INFINITY),
     );
-
     ui.separator();
 
     let query = app.search_query.to_ascii_lowercase();
@@ -47,35 +55,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
     let force_open = folders_with_matches(app, &notes_root, &query);
 
     egui::ScrollArea::vertical()
-        .id_source("vault-list")
+        .id_salt("vault-list")
         .show(ui, |ui| {
-            let dragging =
-                egui::DragAndDrop::has_payload_of_type::<PathBuf>(ui.ctx());
-
-            if dragging {
-                let (_, dropped) = ui.dnd_drop_zone::<PathBuf, _>(
-                    egui::Frame::default().inner_margin(2.0),
-                    |ui| {
-                        ui.add(egui::Label::new("📂 (root)"));
-                    },
-                );
-                if let Some(payload) = dropped {
-                    action = Some(AppAction::MoveNote {
-                        from: (*payload).clone(),
-                        to_folder: None,
-                    });
-                }
+            if let Some(a) = show_tree(app, ui, &notes_root, &query, &force_open) {
+                action = Some(a);
             }
-
-            render_tree(
-                ui,
-                app,
-                &notes_root,
-                0,
-                &query,
-                &force_open,
-                &mut action,
-            );
 
             if !query.is_empty() {
                 ui.separator();
@@ -87,7 +71,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
                         hit.line,
                         truncate(&hit.snippet, 60)
                     );
-                    if ui.selectable_label(false, lbl).clicked() {
+                    if ui.add(egui::Button::selectable(false, lbl)).clicked() {
                         action = Some(AppAction::OpenNote(hit.path.clone()));
                     }
                 }
@@ -95,6 +79,165 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
         });
 
     action
+}
+
+/// Render the `egui_ltreeview` tree and translate the actions it emits
+/// (click-to-open, drop-to-move, context-menu delete) into `AppAction`s.
+///
+/// The notes root (`<vault>/note`) is added as a *flattened* dir node so
+/// it doesn't show up as an extra level in the UI but is still a valid
+/// drop target — that's how a note dragged out of a subfolder lands
+/// back in the vault root.
+fn show_tree(
+    app: &App,
+    ui: &mut egui::Ui,
+    notes_root: &Path,
+    query: &str,
+    force_open: &HashSet<PathBuf>,
+) -> Option<AppAction> {
+    let tree_id = egui::Id::new("vellum-vault-tree");
+    let mut state =
+        TreeViewState::<PathBuf>::load(ui, tree_id).unwrap_or_default();
+    // While a search is active, force-open every folder along the path
+    // to any matching note. `set_openness` overrides the user's stored
+    // state for this frame only — collapse persists once the search
+    // clears because nothing re-sets these folders to true.
+    for folder in force_open {
+        state.set_openness(folder.clone(), true);
+    }
+    // Seed the selection from the currently open note so the tree
+    // highlights it; we ignore the resulting SetSelected echo below.
+    if let Some(current) = app.selected.clone() {
+        if state.selected().as_slice() != [current.clone()] {
+            state.set_one_selected(current);
+        }
+    }
+
+    let pending: RefCell<Option<AppAction>> = RefCell::new(None);
+
+    let (_resp, actions) = TreeView::new(tree_id)
+        .allow_multi_selection(false)
+        .show_state(ui, &mut state, |builder| {
+            // Invisible root that owns the entire tree — droppable, not
+            // visible. Drops with `target == notes_root` mean "back to
+            // root".
+            builder.node(
+                NodeBuilder::dir(notes_root.to_path_buf()).flatten(true),
+            );
+            build_subtree(builder, app, notes_root, query, force_open, &pending);
+            builder.close_dir();
+        });
+
+    state.store(ui, tree_id);
+
+    let mut result = pending.into_inner();
+
+    for a in actions {
+        match a {
+            Action::SetSelected(selected) => {
+                // Single-click on a note → open it. Folder selections
+                // are ignored (folders aren't activatable). We also
+                // skip the echo when the click selected what was
+                // already the open note.
+                if selected.len() == 1
+                    && app.vault.notes.contains(&selected[0])
+                    && app.selected.as_ref() != Some(&selected[0])
+                {
+                    result = Some(AppAction::OpenNote(selected[0].clone()));
+                }
+            }
+            Action::Move(d) => {
+                // Only let users drag notes, never folders.
+                let Some(from) = d.source.into_iter().next() else { continue };
+                if !app.vault.notes.contains(&from) {
+                    continue;
+                }
+                let to_folder = if d.target == notes_root {
+                    None
+                } else {
+                    Some(d.target)
+                };
+                result = Some(AppAction::MoveNote { from, to_folder });
+            }
+            // Ignored: Activate (we open on single-click already),
+            // Drag (in-progress), DragExternal / MoveExternal (no
+            // panel outside the tree accepts drops).
+            Action::Activate(_)
+            | Action::Drag(_)
+            | Action::DragExternal(_)
+            | Action::MoveExternal(_) => {}
+        }
+    }
+
+    result
+}
+
+fn build_subtree(
+    builder: &mut egui_ltreeview::TreeViewBuilder<'_, PathBuf>,
+    app: &App,
+    parent: &Path,
+    query: &str,
+    force_open: &HashSet<PathBuf>,
+    pending: &RefCell<Option<AppAction>>,
+) {
+    let folders: Vec<PathBuf> = app
+        .vault
+        .folders
+        .iter()
+        .filter(|f| f.parent() == Some(parent))
+        .cloned()
+        .collect();
+    let notes: Vec<PathBuf> = app
+        .vault
+        .notes
+        .iter()
+        .filter(|n| n.parent() == Some(parent))
+        .cloned()
+        .collect();
+
+    for folder in folders {
+        let name = folder
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| folder.display().to_string());
+        let folder_for_ctx = folder.clone();
+        builder.node(
+            NodeBuilder::dir(folder.clone())
+                .label(format!("📁 {name}"))
+                .default_open(false)
+                .context_menu(move |ui| {
+                    if ui.button("Delete (must be empty)").clicked() {
+                        *pending.borrow_mut() =
+                            Some(AppAction::DeleteFolder(folder_for_ctx.clone()));
+                        ui.close();
+                    }
+                }),
+        );
+        build_subtree(builder, app, &folder, query, force_open, pending);
+        builder.close_dir();
+    }
+
+    for note in notes {
+        let stem = note
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| note.display().to_string());
+        if !query.is_empty() && !stem.to_ascii_lowercase().contains(query) {
+            continue;
+        }
+        let note_for_ctx = note.clone();
+        builder.node(
+            NodeBuilder::leaf(note.clone())
+                .label(stem)
+                .context_menu(move |ui| {
+                    if ui.button("Delete").clicked() {
+                        *pending.borrow_mut() =
+                            Some(AppAction::DeleteNote(note_for_ctx.clone()));
+                        ui.close();
+                    }
+                }),
+        );
+    }
 }
 
 /// Walk ancestors of every note whose stem matches the query and
@@ -124,146 +267,6 @@ fn folders_with_matches(app: &App, notes_root: &Path, query: &str) -> HashSet<Pa
     }
     s
 }
-
-fn render_tree(
-    ui: &mut egui::Ui,
-    app: &App,
-    parent: &Path,
-    depth: usize,
-    query: &str,
-    force_open: &HashSet<PathBuf>,
-    action: &mut Option<AppAction>,
-) {
-    let folders: Vec<PathBuf> = app
-        .vault
-        .folders
-        .iter()
-        .filter(|f| f.parent() == Some(parent))
-        .cloned()
-        .collect();
-    let notes: Vec<PathBuf> = app
-        .vault
-        .notes
-        .iter()
-        .filter(|n| n.parent() == Some(parent))
-        .cloned()
-        .collect();
-
-    for folder in folders {
-        render_folder(ui, app, &folder, depth, query, force_open, action);
-    }
-    for note in notes {
-        render_note(ui, app, &note, depth, query, action);
-    }
-}
-
-fn render_folder(
-    ui: &mut egui::Ui,
-    app: &App,
-    folder: &Path,
-    depth: usize,
-    query: &str,
-    force_open: &HashSet<PathBuf>,
-    action: &mut Option<AppAction>,
-) {
-    let name = folder
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| folder.display().to_string());
-    let open_id = egui::Id::new(("vault-folder-open", folder));
-    let persisted = ui
-        .ctx()
-        .data(|d| d.get_temp::<bool>(open_id))
-        .unwrap_or(false);
-    let is_open = persisted || force_open.contains(folder);
-
-    let (inner, dropped) = ui.dnd_drop_zone::<PathBuf, _>(
-        egui::Frame::default(),
-        |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(depth as f32 * INDENT_PX);
-                let chevron = if is_open { "▼" } else { "▶" };
-                ui.add(
-                    egui::Label::new(format!("{chevron}  {name}"))
-                        .sense(egui::Sense::click()),
-                )
-            })
-            .inner
-        },
-    );
-    let row_resp = inner.inner;
-
-    if row_resp.clicked() {
-        ui.ctx().data_mut(|d| d.insert_temp(open_id, !persisted));
-    }
-
-    let folder_owned = folder.to_path_buf();
-    row_resp.context_menu(|ui| {
-        if ui.button("Delete (must be empty)").clicked() {
-            *action = Some(AppAction::DeleteFolder(folder_owned.clone()));
-            ui.close_menu();
-        }
-    });
-
-    if let Some(payload) = dropped {
-        *action = Some(AppAction::MoveNote {
-            from: (*payload).clone(),
-            to_folder: Some(folder_owned),
-        });
-    }
-
-    if is_open {
-        render_tree(ui, app, folder, depth + 1, query, force_open, action);
-    }
-}
-
-fn render_note(
-    ui: &mut egui::Ui,
-    app: &App,
-    path: &Path,
-    depth: usize,
-    query: &str,
-    action: &mut Option<AppAction>,
-) {
-    let name = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
-
-    if !query.is_empty() && !name.to_ascii_lowercase().contains(query) {
-        return;
-    }
-
-    let is_selected = app.selected.as_deref() == Some(path);
-    let label_resp = ui
-        .horizontal(|ui| {
-            // Notes sit one chevron-width deeper than their folder so the
-            // text aligns with the folder name, not the chevron.
-            ui.add_space(depth as f32 * INDENT_PX + CHEVRON_PX);
-            ui.add(egui::SelectableLabel::new(is_selected, name))
-        })
-        .inner;
-
-    let drag_id = egui::Id::new(("vault-note-drag", path));
-    let resp = ui.interact(
-        label_resp.rect,
-        drag_id,
-        egui::Sense::click_and_drag(),
-    );
-    resp.dnd_set_drag_payload(path.to_path_buf());
-    if resp.clicked() {
-        *action = Some(AppAction::OpenNote(path.to_path_buf()));
-    }
-    resp.context_menu(|ui| {
-        if ui.button("Delete").clicked() {
-            *action = Some(AppAction::DeleteNote(path.to_path_buf()));
-            ui.close_menu();
-        }
-    });
-}
-
-const INDENT_PX: f32 = 14.0;
-const CHEVRON_PX: f32 = 14.0;
 
 /// One "[text input] [button]" row that emits `make(value)` when the
 /// user presses Enter in the input or clicks the button. Stacks the

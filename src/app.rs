@@ -288,34 +288,35 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_watcher();
 
-        let mut actions = self.shortcut_actions(ctx);
+        let ctx = ui.ctx().clone();
+        let mut actions = self.shortcut_actions(&ctx);
 
-        egui::TopBottomPanel::top("topbar").show(ctx, |ui| {
+        egui::Panel::top("topbar").show_inside(ui, |ui| {
             ui::topbar::show(self, ui);
         });
 
-        egui::SidePanel::left("vault")
-            .default_width(240.0)
-            .width_range(24.0..=600.0)
-            .show_animated(ctx, self.sidebar_open, |ui| {
+        egui::Panel::left("vault")
+            .default_size(240.0)
+            .size_range(24.0..=600.0)
+            .show_animated_inside(ui, self.sidebar_open, |ui| {
                 if let Some(a) = ui::vault_explorer::show(self, ui) {
                     actions.push(a);
                 }
             });
 
-        egui::TopBottomPanel::bottom("backlinks")
-            .default_height(140.0)
-            .show(ctx, |ui| {
+        egui::Panel::bottom("backlinks")
+            .default_size(140.0)
+            .show_inside(ui, |ui| {
                 if let Some(a) = ui::backlinks_panel::show(self, ui) {
                     actions.push(a);
                 }
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if let Some(a) = ui::editor_view::show(self, ctx, ui) {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            if let Some(a) = ui::editor_view::show(self, &ctx, ui) {
                 actions.push(a);
             }
         });
