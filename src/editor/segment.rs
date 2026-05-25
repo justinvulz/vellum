@@ -30,7 +30,9 @@ pub fn parse_segments(source: &str) -> Vec<String> {
         starts.push(acc);
     }
 
-    let mut segments: Vec<String> = Vec::new();
+    // Most children fall into text segments rather than block segments,
+    // so the segment count is bounded above by `children.len()`.
+    let mut segments: Vec<String> = Vec::with_capacity(children.len() / 2 + 1);
     let mut current = String::new();
     let mut i = 0;
 

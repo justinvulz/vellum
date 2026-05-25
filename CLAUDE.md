@@ -31,7 +31,7 @@ WINIT_UNIX_BACKEND=x11 cargo run
 ## Architecture
 
 - **`app`** — `App` struct, eframe event loop, `AppAction` dispatch, keyboard shortcuts (`shortcut_actions`), file-watcher polling
-- **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; `open_or_init` calls `ensure_directories` / `ensure_manifest` / `ensure_theme`; holds `notes: Vec<PathBuf>` and `folders: Vec<PathBuf>` populated by `rescan`; CRUD: `create_note`, `delete_note`, `create_folder`, `delete_folder`, `move_note(from, to_folder)` (`to_folder: None` moves back to root `note/`)
+- **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; `open_or_init` calls `ensure_directories` / `ensure_manifest` / `ensure_theme`; holds `notes: Vec<PathBuf>` and `folders: Vec<PathBuf>` populated by `rescan`; CRUD: `create_note`, `delete_note`, `create_folder`, `delete_folder`, `move_note(from, to_folder)` (`to_folder: None` moves back to root `note/`), `rename_note(from, new_stem)` (renames within the same folder). Both `move_note` and `rename_note` funnel through `relocate(from, to)`, which calls `search::rewrite_link_targets` against every other note to keep `#line-note` references pointing at the relocated file.
 - **`editor/`** — editor subsystem:
   - **`segment`** — tree-based splitter; walks `typst::syntax::parse` output and emits one segment per heading / block-math / top-level `#`-code (alone on its line) / text paragraph
   - **`preamble`** — preamble detection (`is_preamble_only`, `collect`) and theme-template source wrapping (`wrap_for_render`)
@@ -40,9 +40,9 @@ WINIT_UNIX_BACKEND=x11 cargo run
   - **`typst_engine`** — in-process Typst 0.14 compiler; implements `typst::World`; bundles fonts via `typst-assets`; `render()` returns a `RenderedPage { texture, links }`, with `links` collected from `FrameItem::Link` entries that use the `vellum://` URL scheme
 - **`external_editor`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`
 - **`file_watcher`** — `FileWatcher` reports external `.typ` changes; `App::poll_watcher` consumes them
-- **`search`** — content search; parses `[[wiki-links]]` for backlinks; `find_note_by_stem(vault, name)` resolves `#line-note` click targets — if `name` contains `/` it is treated as a vault-relative path (`"ideas/foo"` → `note/ideas/foo.typ`), otherwise falls back to case-insensitive stem match (first alphabetically wins)
+- **`search`** — content search; regex-extracts `#line-note("X")` calls from every note for the backlink index (`HashMap<PathBuf, Vec<PathBuf>>`, keyed on the *target* note's path so stem and path-qualified link forms collapse to the same entry); `find_note_by_stem(vault, name)` resolves a link target to a `PathBuf` — if `name` contains `/` it is treated as a vault-relative path (`"ideas/foo"` → `note/ideas/foo.typ`), otherwise falls back to case-insensitive stem match (first alphabetically wins)
 - **`style`** — fonts, text styles, sizing constants (`UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`), the edit-mode accent outline (`paint_edit_outline`), and the editor config types (`EditorConfig`, `SyntaxColors`)
-- **`ui/`** — egui panels: `topbar`, `vault_explorer`, `editor_view`, `backlinks_panel`
+- **`ui/`** — egui panels: `topbar`, `vault_explorer`, `editor_view`, `backlinks_panel`, `rename_dialog` (modal opened from a note's context menu → `AppAction::StartRename` → `RenameNote { from, new_stem }`)
 - **Debug tracing** — `log` + `env_logger` initialised in `main`; default filter `info,vellum=debug`, overridable via `RUST_LOG`
 
 ### Data Flow
@@ -54,7 +54,7 @@ WINIT_UNIX_BACKEND=x11 cargo run
 5. Clicking a rendered segment flips it to a source `TextEdit` (with a blue edit outline) — unless the click landed in a link rectangle, in which case `MixedEditor::show` returns `Some(target)` and `editor_view` emits `OpenNoteByName(target)` instead; focus loss re-splits the buffer
 6. `Ctrl+S` serializes segments back to source (joined with `\n\n`) and writes to disk
 7. File-watcher reports external writes; `App::poll_watcher` reloads the buffer if it is clean
-8. Backlinks updated by scanning all notes for `[[note-name]]` references
+8. Backlinks updated by scanning every note for `#line-note("X")` calls and resolving each target to a `PathBuf`
 
 ### Segment Splitting
 
@@ -176,9 +176,9 @@ External-editor selection is overridden via the `$TERMINAL` env var (handled in 
 - `comemo::evict(0)` is called before each compile to flush Typst's memoization cache.
 - `typst-assets` provides bundled fonts including New Computer Modern Math (required for math rendering). System fonts are loaded via `fontdb` in addition.
 - The render cache key is the *fully wrapped* source (template + preamble + body), so changing any of those parts invalidates the entry. Failed compiles are also cached (in `failed: HashMap<String, String>`) to avoid retrying every frame.
-- **Caret quirk**: in egui 0.27 the built-in caret rect grows to match the galley row span (`cursor_rect` in `text_cursor_state.rs` uses `max.y.at_least(min.y + row_height)`), so widening `line_space` would stretch the caret. `mixed::show_editing` works around this by setting `visuals_mut().text_cursor.color = TRANSPARENT` for the duration of `TextEdit::show`, then painting a `font_size`-tall blinking caret manually in `paint_caret`. Highlighter sections use `valign: Align::Center` so the caret tracks the glyph centre.
+- **Caret quirk**: in egui 0.34 the built-in caret rect grows to match the galley row span (`cursor_rect` in `text_cursor_state.rs` uses `max.y.at_least(min.y + row_height)`), so widening `line_space` would stretch the caret. `mixed::show_editing` works around this by setting `visuals_mut().text_cursor.color = TRANSPARENT` for the duration of `TextEdit::show`, then painting a `font_size`-tall blinking caret manually in `paint_caret`. Highlighter sections use `valign: Align::Center` so the caret tracks the glyph centre. The caret holds solid for `CARET_TYPING_HOLD = 0.5s` after the last keystroke before resuming the `CARET_BLINK_PERIOD = 0.53s` blink cycle.
 - **Theme override**: `assets/default_theme.typ` is `include_str!`'d at compile time and rewritten to `~/vellum/asset/theme.typ` by `vault::ensure_theme` on every launch. The signature `template(doc, width, size)` is owned by the app — changing it on disk will be overwritten next start.
 - Search uses regex; Tantivy is a future upgrade if zstd dependency conflicts are resolved.
-- Obsidian-style `[[links]]` are parsed for backlink tracking.
+- Backlinks are sourced exclusively from `#line-note("X")` calls — `[[wiki-link]]` syntax is **not** supported. Backlinks and click-navigation share the same link syntax to avoid drift between what gets indexed and what gets rendered.
 - **Inter-note link extraction**: `typst_engine::collect_links` walks the compiled `page.frame` and only folds the translation component of `GroupItem::transform` (`tx`, `ty`) into the accumulated origin. Rotation/scale are ignored — fine for `#line-note` (plain inline text), but rectangles will drift if a future caller puts a `vellum://` link inside `rotate(…)` or non-uniform `scale(…)`.
 - `typst::Library::default()` requires `use typst::LibraryExt` to be in scope (typst 0.14+).

@@ -1,4 +1,4 @@
-//! In-process Typst compiler. Targets typst 0.13.
+//! In-process Typst compiler. Targets typst 0.14.
 
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -117,8 +117,8 @@ impl TypstEngine {
         ctx: &egui::Context,
         source: &str,
     ) -> Result<RenderedPage> {
-        *self.main.lock().unwrap() = Source::new(Self::main_id(), source.to_string());
-        self.cache.lock().unwrap().clear();
+        *self.main.lock().expect("typst engine mutex poisoned") = Source::new(Self::main_id(), source.to_string());
+        self.cache.lock().expect("typst engine mutex poisoned").clear();
         comemo::evict(0);
 
         let warned = typst::compile::<PagedDocument>(self);
@@ -209,9 +209,9 @@ impl World for TypstEngine {
 
     fn source(&self, id: FileId) -> FileResult<Source> {
         if id == Self::main_id() {
-            return Ok(self.main.lock().unwrap().clone());
+            return Ok(self.main.lock().expect("typst engine mutex poisoned").clone());
         }
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().expect("typst engine mutex poisoned");
         if let Some(entry) = cache.get(&id) {
             if let Some(source) = &entry.source {
                 return Ok(source.clone());
@@ -229,7 +229,7 @@ impl World for TypstEngine {
     }
 
     fn file(&self, id: FileId) -> FileResult<Bytes> {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock().expect("typst engine mutex poisoned");
         if let Some(entry) = cache.get(&id) {
             if let Some(bytes) = &entry.bytes {
                 return Ok(bytes.clone());

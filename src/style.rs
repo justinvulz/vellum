@@ -28,6 +28,32 @@ pub const SANS_FAMILIES: &[&str] = &[
     "Arial",
 ];
 
+/// CJK fallback families. Every match is appended to both
+/// `Proportional` and `Monospace` so egui can resolve CJK glyphs the
+/// primary sans / `Hack` monospace lack. Ordered roughly by coverage
+/// and ubiquity across Linux / macOS / Windows.
+pub const CJK_FAMILIES: &[&str] = &[
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK KR",
+    "Noto Sans SC",
+    "Noto Sans TC",
+    "Noto Sans JP",
+    "Noto Sans KR",
+    "Source Han Sans SC",
+    "Source Han Sans TC",
+    "Source Han Sans",
+    "PingFang SC",
+    "PingFang TC",
+    "Hiragino Sans",
+    "Microsoft YaHei",
+    "Microsoft JhengHei",
+    "SimSun",
+    "WenQuanYi Micro Hei",
+    "WenQuanYi Zen Hei",
+];
+
 /// Accent stroke used to mark the segment that is currently being edited.
 pub const EDIT_OUTLINE_COLOR: egui::Color32 = egui::Color32::from_rgb(0x4a, 0x9e, 0xff);
 
@@ -138,32 +164,38 @@ pub fn install(ctx: &egui::Context) {
     db.load_system_fonts();
 
     for &family in SANS_FAMILIES {
-        let query = fontdb::Query {
-            families: &[fontdb::Family::Name(family)],
-            weight: fontdb::Weight::NORMAL,
-            stretch: fontdb::Stretch::Normal,
-            style: fontdb::Style::Normal,
-        };
-        let Some(id) = db.query(&query) else { continue };
-        let Some(face) = db.face(id) else { continue };
-        let data = match &face.source {
-            fontdb::Source::File(path) => std::fs::read(path).ok(),
-            fontdb::Source::Binary(bytes) | fontdb::Source::SharedFile(_, bytes) => {
-                Some(bytes.as_ref().as_ref().to_vec())
-            }
-        };
-        let Some(data) = data else { continue };
+        if let Some(key) = load_face(&db, &mut fonts, family) {
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, key);
+            break;
+        }
+    }
 
-        let key = format!("sans-{family}");
-        fonts
-            .font_data
-            .insert(key.clone(), egui::FontData::from_owned(data).into());
-        fonts
+    let mut cjk_loaded: Vec<String> = Vec::new();
+    for &family in CJK_FAMILIES {
+        if let Some(key) = load_face(&db, &mut fonts, family) {
+            cjk_loaded.push(key);
+        }
+    }
+    if !cjk_loaded.is_empty() {
+        let prop = fonts
             .families
             .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, key);
-        break;
+            .or_default();
+        for key in &cjk_loaded {
+            prop.push(key.clone());
+        }
+        let mono = fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default();
+        for key in &cjk_loaded {
+            mono.push(key.clone());
+        }
+        log::debug!("egui CJK fallbacks loaded: {:?}", cjk_loaded);
     }
 
     ctx.set_fonts(fonts);
@@ -191,4 +223,33 @@ pub fn install(ctx: &egui::Context) {
         FontId::new((UI_PT - 2.0).max(10.0), FontFamily::Proportional),
     );
     ctx.set_global_style(style);
+}
+
+fn load_face(
+    db: &fontdb::Database,
+    fonts: &mut egui::FontDefinitions,
+    family: &str,
+) -> Option<String> {
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(family)],
+        weight: fontdb::Weight::NORMAL,
+        stretch: fontdb::Stretch::Normal,
+        style: fontdb::Style::Normal,
+    };
+    let id = db.query(&query)?;
+    let face = db.face(id)?;
+    let key = format!("font-{family}");
+    if fonts.font_data.contains_key(&key) {
+        return Some(key);
+    }
+    let data = match &face.source {
+        fontdb::Source::File(path) => std::fs::read(path).ok()?,
+        fontdb::Source::Binary(bytes) | fontdb::Source::SharedFile(_, bytes) => {
+            bytes.as_ref().as_ref().to_vec()
+        }
+    };
+    let mut font_data = egui::FontData::from_owned(data);
+    font_data.index = face.index;
+    fonts.font_data.insert(key.clone(), font_data.into());
+    Some(key)
 }

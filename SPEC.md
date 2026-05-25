@@ -8,8 +8,7 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
 
 - Store notes as plain `.typ` files (human-readable, git-friendly)
 - Block-level inline editing: every segment renders through Typst and flips to source-edit on click
-- Obsidian-style `[[wiki-links]]` and backlink tracking
-- Typst-native inter-note links (`#line-note("name")`) that compile to real Typst `link`s and are click-navigable inside the app
+- Typst-native inter-note links (`#line-note("name")`) that compile to real Typst `link`s, are click-navigable inside the app, and are also the source of truth for backlink tracking
 - Minimal UI — egui, no Electron, no browser
 - Helix as optional external editor; the app is self-sufficient for basic editing
 
@@ -29,7 +28,7 @@ Vellum is a desktop note-taking app inspired by Obsidian. Notes are Typst (`.typ
   - `delete_note(path)`
   - `create_folder(name)` — accepts nested paths
   - `delete_folder(path)` — empty-only (`fs::remove_dir`); recursive removal not exposed for safety
-  - `move_note(from, to_folder)` — `fs::rename`; `to_folder: None` moves to root `note/`
+  - `move_note(from, to_folder)` and `rename_note(from, new_stem)` both go through a shared `relocate(from, to)` primitive: before touching the filesystem it scans every other note, builds rewritten sources via `search::rewrite_link_targets`, then performs the rename and writes back. Stem-only references (`#line-note("foo")`) stay stem-only; path-qualified references (`#line-note("ideas/foo")`) stay path-qualified. Resolution uses the pre-rename vault so stem-only links are still findable; case is not preserved in the rewritten target.
 - `display_name` strips the vault root prefix for display
 - `default_vault_dir()` falls back to `./vellum` if home dir is unavailable
 
@@ -63,10 +62,11 @@ Each segment is in one of four states:
 
 ### Custom Caret
 
-egui 0.27 ties caret height to the galley's row span, so any increase in row height stretches the caret. To keep a font-sized blinking caret while still allowing wide line spacing, `MixedEditor::show_editing` suppresses egui's built-in caret (`visuals_mut().text_cursor.color = TRANSPARENT`) and paints its own:
+egui 0.34 ties caret height to the galley's row span, so any increase in row height stretches the caret. To keep a font-sized blinking caret while still allowing wide line spacing, `MixedEditor::show_editing` suppresses egui's built-in caret (`visuals_mut().text_cursor.color = TRANSPARENT`) and paints its own:
 
 - Anchored at the row centre, `font_size` points tall.
 - Blinks on a `CARET_BLINK_PERIOD = 0.53s` cycle, with `request_repaint_after` to keep ticking when idle.
+- Holds solid for `CARET_TYPING_HOLD = 0.5s` after the last keystroke, then resumes blinking from the start of a visible phase.
 - Glyph spans use `valign: Align::Center` so the caret tracks the text.
 
 ### Editor Config
@@ -124,7 +124,7 @@ Unresolved targets set the status line to `note not found: X`. A pointing-hand c
 
 - **Content search**: line-by-line substring scan returning `ContentHit { path, line, snippet }`; shown below the file tree when a query is active
 - **Tree filter**: the file tree filters notes by stem match and force-opens ancestor folders of matching notes
-- **Backlinks**: parses `[[link-name]]` from all notes into a `HashMap<String, Vec<PathBuf>>`; shown in backlinks panel for the current note
+- **Backlinks**: regex-extracts `#line-note("X")` calls from all notes, resolves each target to a `PathBuf` via `find_note_by_stem`, and stores reverse references as `HashMap<PathBuf, Vec<PathBuf>>`; shown in the backlinks panel for the current note. Path-qualified (`"ideas/foo"`) and stem (`"foo"`) link forms land on the same target entry.
 - **`find_note_by_stem(vault, name)`**: resolves `#line-note` click targets. If `name` contains `/`, matches by vault-relative path (`"ideas/foo"` → `note/ideas/foo.typ`). Otherwise, case-insensitive stem match; first alphabetically wins. Path-qualified form is needed to distinguish between two notes with the same stem in different folders.
 
 ## UI Layout
@@ -192,7 +192,4 @@ Unresolved targets set the status line to `note not found: X`. A pointing-hand c
 
 - Tantivy full-text index (blocked on zstd dependency conflict)
 - Optional git sync (init/commit/push/pull from the UI)
-- `[[link]]` click-to-navigate in the editor
-- Note rename propagates `[[links]]` across vault
 - On-disk config (vault path, terminal, Helix theme, sizing knobs)
-- Activity-reset for the caret blink (stay solid for ~500ms after a keystroke)

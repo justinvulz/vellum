@@ -121,7 +121,8 @@ impl Vault {
     /// Move a note into `to_folder` (an absolute path under `note/`),
     /// or back to the root `note/` directory when `None`. Fails if a
     /// file with the same name already exists at the destination.
-    /// Returns the note's new path.
+    /// Rewrites `#line-note` references across the vault so links
+    /// continue to resolve. Returns the note's new path.
     pub fn move_note(
         &mut self,
         from: &Path,
@@ -150,12 +151,91 @@ impl Vault {
                 dest.display()
             ));
         }
-        fs::create_dir_all(&dest_dir)
-            .with_context(|| format!("creating {}", dest_dir.display()))?;
-        fs::rename(from, &dest)
-            .with_context(|| format!("moving {} to {}", from.display(), dest.display()))?;
+        self.relocate(from, &dest)
+    }
+
+    /// Rename a note within its current folder, keeping the same parent
+    /// directory. `new_name` is the new file stem (no `/`, no `.typ`
+    /// extension — both are tolerated and stripped). Rewrites
+    /// `#line-note` references across the vault.
+    pub fn rename_note(&mut self, from: &Path, new_name: &str) -> Result<PathBuf> {
+        log::debug!("vault: rename {} -> {}", from.display(), new_name);
+        let rel = clean_relative(new_name)?;
+        if rel.components().count() != 1 {
+            return Err(anyhow::anyhow!(
+                "rename name must not contain '/': {}",
+                new_name
+            ));
+        }
+        let folder = from.parent().ok_or_else(|| {
+            anyhow::anyhow!("source has no parent: {}", from.display())
+        })?;
+        let mut dest = folder.join(&rel);
+        if dest.extension().and_then(|s| s.to_str()) != Some("typ") {
+            dest.set_extension("typ");
+        }
+        if dest == from {
+            return Ok(dest);
+        }
+        if dest.exists() {
+            return Err(anyhow::anyhow!(
+                "destination already exists: {}",
+                dest.display()
+            ));
+        }
+        self.relocate(from, &dest)
+    }
+
+    /// Shared rename / move primitive. The dance is:
+    ///   1. **Before** touching the filesystem, scan every other note
+    ///      for `#line-note` calls that currently resolve to `from`
+    ///      and stage their rewritten sources. Resolution uses the
+    ///      pre-rename vault state, so stem-only references still find
+    ///      the file.
+    ///   2. Rename the file on disk.
+    ///   3. Write the staged rewrites. Failures here are logged but
+    ///      don't abort — the rename has already succeeded.
+    fn relocate(&mut self, from: &Path, to: &Path) -> Result<PathBuf> {
+        let rewrites = self.collect_link_rewrites(from, to);
+
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        fs::rename(from, to)
+            .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+
+        for (path, new_source) in rewrites {
+            if let Err(e) = fs::write(&path, &new_source) {
+                log::warn!("link rewrite: failed to update {}: {}", path.display(), e);
+            } else {
+                log::debug!("link rewrite: updated {}", path.display());
+            }
+        }
+
         self.rescan();
-        Ok(dest)
+        Ok(to.to_path_buf())
+    }
+
+    fn collect_link_rewrites(&self, from: &Path, to: &Path) -> Vec<(PathBuf, String)> {
+        let mut out = Vec::new();
+        for note in &self.notes {
+            if note == from {
+                // The file being moved is content-irrelevant to its own
+                // relocation — its `#line-note` calls point at *other*
+                // notes, none of which are changing.
+                continue;
+            }
+            let Ok(source) = fs::read_to_string(note) else {
+                continue;
+            };
+            if let Some(new_source) =
+                crate::search::rewrite_link_targets(&source, self, from, to)
+            {
+                out.push((note.clone(), new_source));
+            }
+        }
+        out
     }
 
     /// Create an empty subfolder under `note/`. `name` may include `/`

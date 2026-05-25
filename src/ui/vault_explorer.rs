@@ -225,14 +225,20 @@ fn build_subtree(
         if !query.is_empty() && !stem.to_ascii_lowercase().contains(query) {
             continue;
         }
-        let note_for_ctx = note.clone();
+        let note_for_rename = note.clone();
+        let note_for_delete = note.clone();
         builder.node(
             NodeBuilder::leaf(note.clone())
                 .label(stem)
                 .context_menu(move |ui| {
+                    if ui.button("Rename").clicked() {
+                        *pending.borrow_mut() =
+                            Some(AppAction::StartRename(note_for_rename.clone()));
+                        ui.close();
+                    }
                     if ui.button("Delete").clicked() {
                         *pending.borrow_mut() =
-                            Some(AppAction::DeleteNote(note_for_ctx.clone()));
+                            Some(AppAction::DeleteNote(note_for_delete.clone()));
                         ui.close();
                     }
                 }),

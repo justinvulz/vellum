@@ -28,9 +28,26 @@ pub enum AppAction {
         from: PathBuf,
         to_folder: Option<PathBuf>,
     },
+    /// Open the rename dialog for a note. The dialog seeds its input
+    /// with the note's current stem.
+    StartRename(PathBuf),
+    /// Commit a rename: move `from` to a sibling file whose stem is
+    /// `new_stem`, rewriting `#line-note` references across the vault.
+    RenameNote {
+        from: PathBuf,
+        new_stem: String,
+    },
+    /// Discard the currently-open rename dialog.
+    CancelRename,
     SaveCurrent,
     ReloadCurrent,
     OpenInHelix,
+}
+
+/// State for the rename-note modal. `None` means the dialog is closed.
+pub struct RenameDialog {
+    pub from: PathBuf,
+    pub input: String,
 }
 
 pub struct App {
@@ -45,6 +62,7 @@ pub struct App {
     pub sidebar_open: bool,
     pub watcher: Option<FileWatcher>,
     pub status: String,
+    pub rename: Option<RenameDialog>,
 }
 
 impl App {
@@ -65,6 +83,7 @@ impl App {
             sidebar_open: true,
             watcher,
             status: String::new(),
+            rename: None,
         }
     }
 
@@ -158,6 +177,48 @@ impl App {
         }
     }
 
+    fn start_rename(&mut self, path: PathBuf) {
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.rename = Some(RenameDialog { from: path, input: stem });
+    }
+
+    /// Rename a note and propagate the change through every
+    /// `#line-note` call in the vault.
+    ///
+    /// The current buffer is saved first so that the file-watcher
+    /// reload that fires after our cross-vault rewrites doesn't drop
+    /// the user's unsaved edits.
+    fn rename_note(&mut self, from: PathBuf, new_stem: String) {
+        log::info!(
+            "note: rename {} -> {}",
+            self.vault.display_name(&from),
+            new_stem
+        );
+        if self.mixed.dirty {
+            self.save_current();
+        }
+        let was_open = self.selected.as_ref() == Some(&from);
+        match self.vault.rename_note(&from, &new_stem) {
+            Ok(new_path) => {
+                if was_open {
+                    self.selected = Some(new_path);
+                }
+                self.backlinks = search::build_backlinks(&self.vault);
+                self.rename = None;
+                self.status = "renamed".into();
+            }
+            Err(e) => {
+                log::warn!("note: rename failed: {e}");
+                self.status = format!("rename failed: {e}");
+                // Leave the dialog open so the user can correct the
+                // input rather than re-opening from the context menu.
+            }
+        }
+    }
+
     fn move_note(&mut self, from: PathBuf, to_folder: Option<PathBuf>) {
         log::info!(
             "note: move {} → {}",
@@ -230,6 +291,9 @@ impl App {
             AppAction::CreateFolder(name) => self.create_folder(name),
             AppAction::DeleteFolder(p) => self.delete_folder(p),
             AppAction::MoveNote { from, to_folder } => self.move_note(from, to_folder),
+            AppAction::StartRename(p) => self.start_rename(p),
+            AppAction::RenameNote { from, new_stem } => self.rename_note(from, new_stem),
+            AppAction::CancelRename => self.rename = None,
             AppAction::SaveCurrent => {
                 self.save_current();
             }
@@ -320,6 +384,10 @@ impl eframe::App for App {
                 actions.push(a);
             }
         });
+
+        if let Some(a) = ui::rename_dialog::show(self, &ctx) {
+            actions.push(a);
+        }
 
         for action in actions {
             self.perform(action);

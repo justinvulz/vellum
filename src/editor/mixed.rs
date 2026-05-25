@@ -23,6 +23,11 @@ const TOP_PADDING: f32 = 24.0;
 /// loads progressively.
 const FRAME_COMPILE_BUDGET_MS: u64 = 16;
 
+/// Source-edit `TextEdit` font is scaled down from `EditorConfig::font_size`
+/// so the monospace glyphs roughly match the visual weight of the
+/// rendered proportional Typst output above and below them.
+const EDIT_FONT_SCALE: f32 = 0.8;
+
 pub struct MixedEditor {
     pub segments: Vec<String>,
     pub editing_index: Option<usize>,
@@ -59,6 +64,12 @@ struct FrameState {
     any_changed: bool,
     any_lost_focus: bool,
     next_focus: Option<egui::Id>,
+}
+
+impl Default for MixedEditor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MixedEditor {
@@ -297,7 +308,7 @@ fn show_editing(
     config: &EditorConfig,
     last_typed: f64,
 ) -> egui::Response {
-    let reduce_font_size = 0.8 * config.font_size;
+    let reduce_font_size = EDIT_FONT_SCALE * config.font_size;
 
     let font_id = egui::FontId::new(reduce_font_size, config.font_family.clone());
     // `line_space` is the extra gap on top of `font_size`.
@@ -356,7 +367,6 @@ fn show_editing(
                 &output.galley,
                 output.galley_pos,
                 range.primary,
-                &font_id,
                 reduce_font_size,
                 real_cursor_stroke,
                 last_typed,
@@ -383,7 +393,6 @@ fn paint_caret(
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
     cursor: egui::epaint::text::cursor::CCursor,
-    font_id: &egui::FontId,
     font_size: f32,
     stroke: egui::Stroke,
     last_typed: f64,
@@ -412,13 +421,12 @@ fn paint_caret(
     }
 
     let pos = galley.pos_from_cursor(cursor);
-    let (row_top, _row_bottom) = if pos.max.y > pos.min.y {
-        (pos.min.y + galley_pos.y, pos.max.y + galley_pos.y)
+    let row_top = if pos.max.y > pos.min.y {
+        pos.min.y + galley_pos.y
     } else {
         // Empty galley: `pos_from_cursor` returns a zero-sized rect,
-        // so fall back to the font's natural row height.
-        let h = ui.fonts_mut(|f| f.row_height(font_id));
-        (galley_pos.y, galley_pos.y + h)
+        // so the cursor sits at the galley origin.
+        galley_pos.y
     };
     let x = pos.min.x + galley_pos.x;
     ui.painter().line_segment(
