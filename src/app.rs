@@ -60,6 +60,7 @@ pub struct App {
     pub search_query: String,
     pub backlinks: BacklinkIndex,
     pub sidebar_open: bool,
+    pub backlinks_open: bool,
     pub watcher: Option<FileWatcher>,
     pub status: String,
     pub rename: Option<RenameDialog>,
@@ -81,6 +82,7 @@ impl App {
             search_query: String::new(),
             backlinks,
             sidebar_open: true,
+            backlinks_open: true,
             watcher,
             status: String::new(),
             rename: None,
@@ -373,7 +375,7 @@ impl eframe::App for App {
 
         egui::Panel::bottom("backlinks")
             .default_size(140.0)
-            .show_inside(ui, |ui| {
+            .show_animated_inside(ui, self.backlinks_open, |ui| {
                 if let Some(a) = ui::backlinks_panel::show(self, ui) {
                     actions.push(a);
                 }

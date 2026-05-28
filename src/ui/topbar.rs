@@ -5,8 +5,12 @@ use crate::app::App;
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let icon = if app.sidebar_open { "◀" } else { "▶" };
-        if ui.button(icon).clicked() {
+        if ui.button(icon).on_hover_text("Toggle sidebar").clicked() {
             app.sidebar_open = !app.sidebar_open;
+        }
+        let bl_icon = if app.backlinks_open { "▼" } else { "▲" };
+        if ui.button(bl_icon).on_hover_text("Toggle backlinks").clicked() {
+            app.backlinks_open = !app.backlinks_open;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if !app.status.is_empty() {
