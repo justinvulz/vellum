@@ -126,7 +126,7 @@ On first launch Vellum creates `~/vellum/`:
     theme.typ       ← dark theme (regenerated each launch)
 ```
 
-> `theme.typ` is rewritten on every launch. To customise it, edit `assets/default_theme.typ` in this repo and rebuild.
+> `theme.typ` is rewritten on every launch. To customise the template, edit `assets/default_theme.typ` in this repo and rebuild. The page fill, body text colour, and `#line-note` link colour come from your `[ui_colors]` config — those three values are substituted into the template at write time so rendered blocks match the surrounding UI.
 
 ## Shortcuts
 
@@ -137,12 +137,15 @@ On first launch Vellum creates `~/vellum/`:
 
 ## Config
 
-On first launch Vellum writes a commented sample to `~/.config/vellum/config.toml`. Every field is optional:
+On first launch Vellum copies its bundled defaults (`assets/default_config.toml`) to `~/.config/vellum/config.toml`. Every field is optional — the bundled defaults are merged behind your file on every load, so you can omit any field (or any whole table) and the default fills it in.
 
 - `vault_path` — override the default `~/vellum` location (leading `~/` is expanded).
 - `terminal` — preferred terminal for `Ctrl+E` (falls back to `$TERMINAL`, then auto-detection).
 - `ui_pt`, `editor_pt`, `content_width_pt` — sizing knobs, in typographic points.
-- `[colors]` — syntax-highlighter palette, hex strings like `"#d4d4d4"`.
+- `sans_families` — sans-serif faces tried in priority order, both in egui and in the Typst theme.
+- `cjk_families` — CJK fallback faces appended to both Proportional and Monospace.
+- `[ui_colors]` — chrome palette (panel surfaces, hover/active fills, accent, body text). Hex strings.
+- `[colors]` — syntax-highlighter palette. Hex strings like `"#d4d4d4"`.
 
 A malformed file logs a warning and is treated as if absent — the app never refuses to start.
 

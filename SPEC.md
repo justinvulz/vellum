@@ -164,15 +164,18 @@ Unresolved targets set the status line to `note not found: X`. A pointing-hand c
 
 ## Config
 
-- **On-disk**: `~/.config/vellum/config.toml` (via `dirs::config_dir()`). Loaded once at startup by `config::load()` and cached in a `OnceLock<Config>`; every later read goes through `config::current()`. The file is created with commented defaults on first run; missing or malformed input falls back to defaults with a warning.
-- **Fields** (all optional, `#[serde(default)]`):
+- **On-disk**: `~/.config/vellum/config.toml` (via `dirs::config_dir()`). Loaded once at startup by `config::load()` and cached in a `OnceLock<Config>`; every later read goes through `config::current()`. The file is created on first run by copying `assets/default_config.toml` (the bundled defaults) verbatim. Missing fields are merged in from the same bundled file at load time (`toml::Value` merge → `try_into::<Config>()`), so any field can be omitted from the user's copy. Malformed input falls back to bundled defaults with a warning.
+- **Fields** (every field has a bundled default; user may omit any):
   - `vault_path: Option<String>` — overrides `~/vellum` (leading `~/` is expanded).
   - `terminal: Option<String>` — preferred terminal for the Helix integration.
   - `ui_pt`, `editor_pt`, `content_width_pt: f32` — sizing knobs.
-  - `colors: SyntaxColors` — per-token-kind palette; each `egui::Color32` round-trips through hex strings via a `style::color_hex` serde adaptor.
-- **Style accessors**: `style::ui_pt()`, `style::editor_pt()`, `style::content_width_pt()` read from `config::current()`, so a single load at startup propagates to every consumer.
+  - `sans_families: Vec<String>` — sans-serif faces tried in priority order, both in egui and the Typst theme.
+  - `cjk_families: Vec<String>` — CJK fallback faces appended to both Proportional and Monospace.
+  - `colors: SyntaxColors` — per-token-kind palette (12 hex fields); each `egui::Color32` round-trips through hex strings via a `style::color_hex` serde adaptor.
+  - `ui_colors: UiColors` — chrome palette (11 hex fields driving `style::install_visuals`; three values — `panel`, `text`, `accent` — are also substituted into the Typst theme by `vault::ensure_theme`).
+- **Style accessors**: `style::ui_pt()`, `style::editor_pt()`, `style::content_width_pt()`, `style::accent()` read from `config::current()`, so a single load at startup propagates to every consumer.
 - **Per-editor**: `style::EditorConfig` (font, `line_space`, `SyntaxColors`) exposed as `MixedEditor::config`; `Default::default()` seeds it from the loaded config. Mutate at runtime for live retheming.
-- **Other knobs not (yet) on disk**: `SANS_FAMILIES`, `CJK_FAMILIES`, `EDIT_OUTLINE_COLOR` in `src/style.rs`; per-frame compile budget and caret timing in `src/editor/mixed.rs`.
+- **Other knobs not (yet) on disk**: per-frame compile budget and caret timing in `src/editor/mixed.rs`; corner radii, shadow tuning, and spacing in `style::install_visuals`.
 - **Logging**: `RUST_LOG` overrides the default `info,vellum=debug` filter (`env_logger`). Traces cover vault open/scan, note open/save/reload, segment parsing, render bursts, compile errors, file-watcher events, and Helix launches.
 - **External editor priority**: `config.terminal` → `$TERMINAL` env var → auto-detect order in `external_editor.rs`.
 

@@ -31,7 +31,7 @@ WINIT_UNIX_BACKEND=x11 cargo run
 ## Architecture
 
 - **`app`** — `App` struct, eframe event loop, `AppAction` dispatch, keyboard shortcuts (`shortcut_actions`), file-watcher polling
-- **`config`** — on-disk settings loaded from `~/.config/vellum/config.toml` (`Config` struct, `load()`, `current()` global accessor via `OnceLock`); writes a commented sample on first run; falls back to defaults on missing / malformed input. Hex-string serde adaptor for `egui::Color32`.
+- **`config`** — on-disk settings loaded from `~/.config/vellum/config.toml` (`Config` struct, `load()`, `current()` global accessor via `OnceLock`). The bundled `assets/default_config.toml` is the single source of truth: copied verbatim to the user's config dir on first run, and used as the baseline for every load (user TOML is merged on top at `toml::Value` level via `merge_values`, then deserialized into `Config`). The TOML-level merge is what lets fields be omitted; `Config` / `UiColors` / `SyntaxColors` deliberately do **not** carry `#[serde(default)]` — see the Config section below.
 - **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; `open_or_init` calls `ensure_directories` / `ensure_manifest` / `ensure_theme`; holds `notes: Vec<PathBuf>` and `folders: Vec<PathBuf>` populated by `rescan`; CRUD: `create_note`, `delete_note`, `create_folder`, `delete_folder`, `move_note(from, to_folder)` (`to_folder: None` moves back to root `note/`), `rename_note(from, new_stem)` (renames within the same folder). Both `move_note` and `rename_note` funnel through `relocate(from, to)`, which calls `search::rewrite_link_targets` against every other note to keep `#line-note` references pointing at the relocated file.
 - **`editor/`** — editor subsystem:
   - **`segment`** — tree-based splitter; walks `typst::syntax::parse` output and emits one segment per heading / block-math / top-level `#`-code (alone on its line) / text paragraph
@@ -42,8 +42,8 @@ WINIT_UNIX_BACKEND=x11 cargo run
 - **`external_editor`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`
 - **`file_watcher`** — `FileWatcher` reports external `.typ` changes; `App::poll_watcher` consumes them
 - **`search`** — content search; regex-extracts `#line-note("X")` calls from every note for the backlink index (`HashMap<PathBuf, Vec<PathBuf>>`, keyed on the *target* note's path so stem and path-qualified link forms collapse to the same entry); `find_note_by_stem(vault, name)` resolves a link target to a `PathBuf` — if `name` contains `/` it is treated as a vault-relative path (`"ideas/foo"` → `note/ideas/foo.typ`), otherwise falls back to case-insensitive stem match (first alphabetically wins)
-- **`style`** — fonts, text styles, sizing accessors (`ui_pt()`, `editor_pt()`, `content_width_pt()` — backed by `config::current()`), the edit-mode accent outline (`paint_edit_outline`), and the editor config types (`EditorConfig`, `SyntaxColors`). `SyntaxColors` is serde-derived with a `color_hex` adaptor module for `egui::Color32 ↔ "#rrggbb"`.
-- **`ui/`** — egui panels: `topbar`, `vault_explorer`, `editor_view`, `backlinks_panel`, `rename_dialog` (modal opened from a note's context menu → `AppAction::StartRename` → `RenameNote { from, new_stem }`)
+- **`style`** — fonts, text styles, sizing accessors (`ui_pt()`, `editor_pt()`, `content_width_pt()` — backed by `config::current()`), the `accent()` colour reused across the chrome (edit outline, selection, hyperlinks, dirty marker), `paint_edit_outline`, `soft_separator` (12 pt-spaced version of `Separator` used in place of `ui.separator()`), `install_visuals` (tuned dark `egui::Visuals` — single accent, 6 px corner radii, subtle window/popup shadow, tighter spacing — all sourced from `Config.ui_colors`), and the editor config types (`EditorConfig`, `SyntaxColors`, `UiColors`). Both colour structs are serde-derived with a `color_hex` adaptor module for `egui::Color32 ↔ "#rrggbb"`. `install_fonts` loads the sans face from `Config.sans_families`, registers `egui-phosphor` (Regular variant) as a fallback for Proportional so icon glyphs in the UI resolve, and appends `Config.cjk_families` to both Proportional and Monospace.
+- **`ui/`** — egui panels: `topbar` (sidebar + backlinks toggles using `Button::selectable` + phosphor `SIDEBAR_SIMPLE`/`LINK`; dirty marker as accent-tinted `DOT`), `vault_explorer` (phosphor `FOLDER`/`MAGNIFYING_GLASS`/`FILE_PLUS`/`FOLDER_PLUS`/`PENCIL_SIMPLE`/`TRASH` glyphs throughout), `editor_view` (Save/Helix/Reload buttons with phosphor `FLOPPY_DISK`/`TERMINAL`/`ARROW_CLOCKWISE` icons), `backlinks_panel` (hideable via `App.backlinks_open` + `Panel::show_animated_inside`, with `add_space(8)` padding above/below the heading), `rename_dialog` (modal opened from a note's context menu → `AppAction::StartRename` → `RenameNote { from, new_stem }`)
 - **Debug tracing** — `log` + `env_logger` initialised in `main`; default filter `info,vellum=debug`, overridable via `RUST_LOG`
 
 ### Data Flow
@@ -52,7 +52,7 @@ WINIT_UNIX_BACKEND=x11 cargo run
 2. Selecting a note loads its contents into `MixedEditor` via `load(&source)`
 3. `MixedEditor` runs `segment::parse_segments` over the source, producing a `Vec<String>` of block segments
 4. Each frame, `ensure_rendered` compiles uncached segments within a 16 ms budget; compiled segments enter the render cache as `RenderedPage { texture, links }`, the rest show `⟳ rendering…` and are compiled on the next repaint
-5. Clicking a rendered segment flips it to a source `TextEdit` (with a blue edit outline) — unless the click landed in a link rectangle, in which case `MixedEditor::show` returns `Some(target)` and `editor_view` emits `OpenNoteByName(target)` instead; focus loss re-splits the buffer
+5. Clicking a rendered segment flips it to a source `TextEdit` (outlined with `style::accent()`) — unless the click landed in a link rectangle, in which case `MixedEditor::show` returns `Some(target)` and `editor_view` emits `OpenNoteByName(target)` instead; focus loss re-splits the buffer
 6. `Ctrl+S` serializes segments back to source (joined with `\n\n`) and writes to disk
 7. File-watcher reports external writes; `App::poll_watcher` reloads the buffer if it is clean
 8. Backlinks updated by scanning every note for `#line-note("X")` calls and resolving each target to a `PathBuf`
@@ -85,7 +85,7 @@ Because the parser is tree-aware, a blank line *inside* a function call's conten
 
 Each segment is in one of four states each frame:
 
-- **Editing** — monospace `TextEdit` with a blue edit outline (`style::paint_edit_outline`). Text is laid out via a custom layouter that runs `editor::highlight::highlight` over the source on every keystroke, producing a coloured `LayoutJob`. egui's built-in caret is suppressed and `mixed::paint_caret` draws a `font_size`-tall blinking caret centred in the row.
+- **Editing** — monospace `TextEdit` with an accent-coloured edit outline (`style::paint_edit_outline`, painted with `style::accent()`). Text is laid out via a custom layouter that runs `editor::highlight::highlight` over the source on every keystroke, producing a coloured `LayoutJob`. egui's built-in caret is suppressed and `mixed::paint_caret` draws a `font_size`-tall blinking caret centred in the row.
 - **Compile error** — red banner + error text + source label; click to edit
 - **Rendered** — compiled Typst image at 1 egui pt ↔ 1 typst pt; click to edit
 - **Pending** — `⟳ rendering…` placeholder while the engine compiles
@@ -153,22 +153,28 @@ The sidebar is a VS Code-style file tree (`ui::vault_explorer`):
 
 ### External Editor (Helix)
 
-`open_in_helix()` in `external_editor.rs` tries terminals in order: `alacritty`, `kitty`, `foot`, `wezterm`, `ghostty`, `gnome-terminal`, `konsole`, `xterm`. Override with `$TERMINAL` env var. The dirty buffer is saved before launching. `FileWatcher` (in `file_watcher.rs`) reloads the buffer when Helix writes the file (only if buffer is clean).
+`open_in_helix()` in `external_editor.rs` resolves the terminal in order: `config.terminal`, the `$TERMINAL` env var, then the auto-detect list (`alacritty`, `kitty`, `foot`, `wezterm`, `ghostty`, `gnome-terminal`, `konsole`, `xterm`). The dirty buffer is saved before launching. `FileWatcher` (in `file_watcher.rs`) reloads the buffer when Helix writes the file (only if the buffer is clean).
 
 ### Config
 
-On-disk config at `~/.config/vellum/config.toml` (path from `dirs::config_dir()`). Loaded once by `config::load()` in `main` and stored in a `OnceLock<Config>` so `config::current()` is callable from anywhere. Missing file → write a commented sample and use defaults. Malformed file → log a warning and use defaults.
+On-disk config at `~/.config/vellum/config.toml` (path from `dirs::config_dir()`). Loaded once by `config::load()` in `main` and stored in a `OnceLock<Config>` so `config::current()` is callable from anywhere. Missing file → copy `assets/default_config.toml` to disk and use the bundled defaults. Malformed file → log a warning and use defaults.
 
-Fields (all optional, with `#[serde(default)]`):
+`assets/default_config.toml` is `include_str!`'d at compile time. It is both the file written to the user's config dir on first run *and* the parsed baseline merged behind every user load: `read_or_default` parses the user TOML to `toml::Value`, recursively merges over the bundled defaults via `merge_values`, then `try_into::<Config>()` on the merged tree. The user can omit any field (or any whole table) and the bundled value fills it in.
+
+`Config`, `UiColors`, and `SyntaxColors` deliberately **do not** carry `#[serde(default)]`. Serde's struct-level default attribute calls `<T as Default>::default()` eagerly at the start of every deserialization (to seed missing fields). Those `Default` impls in turn read from `config::defaults()` — a `OnceLock<Config>` that parses the bundled TOML. The eager call would re-enter that lock from inside its own initializer and deadlock the app at startup. Doing the merge on `toml::Value` first means every field is already present by the time we reach `try_into::<Config>()`, so no `Default::default()` is invoked during deserialization.
+
+Fields:
 
 - `vault_path: Option<String>` — overrides `~/vellum`. Leading `~/` expands to home.
 - `terminal: Option<String>` — preferred Helix terminal; checked before `$TERMINAL` and the auto-detect list.
 - `ui_pt`, `editor_pt`, `content_width_pt: f32` — sizing knobs. Consumed via `style::ui_pt()` etc.
-- `colors: SyntaxColors` — syntax highlighter palette. Each `egui::Color32` field round-trips through hex strings via the `style::color_hex` serde adaptor.
+- `sans_families: Vec<String>` — sans-serif faces to try in priority order. Same list is threaded into the Typst theme template (via `assets/default_theme.typ`) so plain prose and rendered blocks pick up the same face.
+- `cjk_families: Vec<String>` — CJK fallback faces; each match is appended to both Proportional and Monospace.
+- `colors: SyntaxColors` — syntax highlighter palette (12 hex fields).
+- `ui_colors: UiColors` — chrome palette (11 hex fields: `bg`, `panel`, `elevated`, `hovered`, `active`, `line`, `line_strong`, `accent`, `text`, `text_strong`, `text_dim`). Consumed by `style::install_visuals` and `style::accent()`, and three of them (`panel`, `text`, `accent`) are substituted into the Typst theme by `vault::ensure_theme`.
 
-In-code, hard-coded tunables (not exposed via config):
+Hard-coded tunables (not exposed via config):
 
-- `SANS_FAMILIES`, `CJK_FAMILIES`, `EDIT_OUTLINE_COLOR` in `src/style.rs`.
 - `EDIT_FONT_SCALE`, `SEGMENT_GAP`, `TOP_PADDING`, `FRAME_COMPILE_BUDGET_MS`, caret blink/hold constants in `src/editor/mixed.rs`.
 
 Other knobs: `$TERMINAL` env var still works as a fallback in `external_editor.rs`. Logging filter via `RUST_LOG` (default `info,vellum=debug`).
@@ -187,7 +193,7 @@ Other knobs: `$TERMINAL` env var still works as a fallback in `external_editor.r
 - `typst-assets` provides bundled fonts including New Computer Modern Math (required for math rendering). System fonts are loaded via `fontdb` in addition.
 - The render cache key is the *fully wrapped* source (template + preamble + body), so changing any of those parts invalidates the entry. Failed compiles are also cached (in `failed: HashMap<String, String>`) to avoid retrying every frame.
 - **Caret quirk**: in egui 0.34 the built-in caret rect grows to match the galley row span (`cursor_rect` in `text_cursor_state.rs` uses `max.y.at_least(min.y + row_height)`), so widening `line_space` would stretch the caret. `mixed::show_editing` works around this by setting `visuals_mut().text_cursor.color = TRANSPARENT` for the duration of `TextEdit::show`, then painting a `font_size`-tall blinking caret manually in `paint_caret`. Highlighter sections use `valign: Align::Center` so the caret tracks the glyph centre. The caret holds solid for `CARET_TYPING_HOLD = 0.5s` after the last keystroke before resuming the `CARET_BLINK_PERIOD = 0.53s` blink cycle.
-- **Theme override**: `assets/default_theme.typ` is `include_str!`'d at compile time and rewritten to `~/vellum/asset/theme.typ` by `vault::ensure_theme` on every launch. The signature `template(doc, width, size)` is owned by the app — changing it on disk will be overwritten next start.
+- **Theme override**: `assets/default_theme.typ` is `include_str!`'d at compile time and rewritten to `~/vellum/asset/theme.typ` by `vault::ensure_theme` on every launch. The signature `template(doc, width, size)` is owned by the app — changing it on disk will be overwritten next start. Before writing, `ensure_theme` substitutes three placeholder tokens — `@@VELLUM_PANEL@@`, `@@VELLUM_TEXT@@`, `@@VELLUM_ACCENT@@` — with hex strings from `config::current().ui_colors`, so the Typst page fill, body text colour, and `#line-note` link colour stay in sync with the egui chrome.
 - Search uses regex; Tantivy is a future upgrade if zstd dependency conflicts are resolved.
 - Backlinks are sourced exclusively from `#line-note("X")` calls — `[[wiki-link]]` syntax is **not** supported. Backlinks and click-navigation share the same link syntax to avoid drift between what gets indexed and what gets rendered.
 - **Inter-note link extraction**: `typst_engine::collect_links` walks the compiled `page.frame` and only folds the translation component of `GroupItem::transform` (`tx`, `ty`) into the accumulated origin. Rotation/scale are ignored — fine for `#line-note` (plain inline text), but rectangles will drift if a future caller puts a `vellum://` link inside `rotate(…)` or non-uniform `scale(…)`.
