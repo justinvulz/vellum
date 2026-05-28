@@ -7,7 +7,9 @@
 
 use crate::app::{App, AppAction};
 use crate::search;
+use crate::style;
 use egui_ltreeview::{Action, NodeBuilder, TreeView, TreeViewState};
+use egui_phosphor::regular as icon;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -17,7 +19,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
 
     ui.add(egui::Label::new(egui::RichText::new("Vellum").heading()).truncate());
     ui.add(egui::Label::new(app.vault.root.display().to_string()).truncate());
-    ui.separator();
+    style::soft_separator(ui);
 
     let narrow = ui.available_width() < 140.0;
 
@@ -25,7 +27,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
         ui,
         &mut app.new_note_name,
         "new note…",
-        "New",
+        icon::FILE_PLUS,
         narrow,
         AppAction::CreateNote,
     ) {
@@ -35,7 +37,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
         ui,
         &mut app.new_folder_name,
         "new folder…",
-        "Folder",
+        icon::FOLDER_PLUS,
         narrow,
         AppAction::CreateFolder,
     ) {
@@ -45,10 +47,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
     ui.add_space(4.0);
     ui.add(
         egui::TextEdit::singleline(&mut app.search_query)
-            .hint_text("search…")
+            .hint_text(format!("{}  search…", icon::MAGNIFYING_GLASS))
             .desired_width(f32::INFINITY),
     );
-    ui.separator();
+    style::soft_separator(ui);
 
     let query = app.search_query.to_ascii_lowercase();
     let notes_root = app.vault.root.join("note");
@@ -62,7 +64,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) -> Option<AppAction> {
             }
 
             if !query.is_empty() {
-                ui.separator();
+                style::soft_separator(ui);
                 ui.label("Content matches");
                 for hit in search::content_search(&app.vault, &app.search_query, 25) {
                     let lbl = format!(
@@ -203,10 +205,13 @@ fn build_subtree(
         let folder_for_ctx = folder.clone();
         builder.node(
             NodeBuilder::dir(folder.clone())
-                .label(format!("📁 {name}"))
+                .label(format!("{} {name}", icon::FOLDER))
                 .default_open(false)
                 .context_menu(move |ui| {
-                    if ui.button("Delete (must be empty)").clicked() {
+                    if ui
+                        .button(format!("{} Delete (must be empty)", icon::TRASH))
+                        .clicked()
+                    {
                         *pending.borrow_mut() =
                             Some(AppAction::DeleteFolder(folder_for_ctx.clone()));
                         ui.close();
@@ -231,12 +236,15 @@ fn build_subtree(
             NodeBuilder::leaf(note.clone())
                 .label(stem)
                 .context_menu(move |ui| {
-                    if ui.button("Rename").clicked() {
+                    if ui
+                        .button(format!("{} Rename", icon::PENCIL_SIMPLE))
+                        .clicked()
+                    {
                         *pending.borrow_mut() =
                             Some(AppAction::StartRename(note_for_rename.clone()));
                         ui.close();
                     }
-                    if ui.button("Delete").clicked() {
+                    if ui.button(format!("{} Delete", icon::TRASH)).clicked() {
                         *pending.borrow_mut() =
                             Some(AppAction::DeleteNote(note_for_delete.clone()));
                         ui.close();

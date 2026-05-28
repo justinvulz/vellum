@@ -39,12 +39,6 @@ fn main() -> Result<()> {
         "Vellum",
         native_options,
         Box::new(|cc| {
-            let mut visuals = egui::Visuals::dark();
-            let bg = egui::Color32::from_rgb(0x0d, 0x0d, 0x0d);
-            visuals.panel_fill = bg;
-            visuals.window_fill = bg;
-            visuals.extreme_bg_color = bg;
-            cc.egui_ctx.set_visuals(visuals);
             style::install(&cc.egui_ctx);
             Ok(Box::new(App::new(vault)))
         }),

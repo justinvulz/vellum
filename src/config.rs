@@ -6,21 +6,29 @@
 //! constants used throughout the app reflect user overrides.
 //!
 //! Missing or malformed files fall back to defaults; the file is
-//! never required. On first run we write a commented sample so users
-//! can discover what is configurable without consulting the source.
+//! never required. On first run we write a copy of the bundled default
+//! to the user's config dir so the location and schema are discoverable.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use crate::style::SyntaxColors;
+use crate::style::{SyntaxColors, UiColors};
+
+/// Bundled baseline for every setting. `~/.config/vellum/config.toml`
+/// is written from this string on first run and any field the user
+/// leaves out is filled from it on every subsequent load.
+const DEFAULT_CONFIG_TOML: &str = include_str!("../assets/default_config.toml");
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
+static DEFAULTS: OnceLock<Config> = OnceLock::new();
 
-/// User-overridable settings loaded from disk. All fields have a
-/// reasonable default; the on-disk file may omit any of them.
+/// User-overridable settings loaded from disk. Every field has a value
+/// in the bundled defaults — partial user configs are merged on top of
+/// the defaults before being deserialized here, so no `#[serde(default)]`
+/// is needed (which is also what keeps the bundled-defaults parse from
+/// re-entering `SyntaxColors::default` / `UiColors::default`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
 pub struct Config {
     /// Path to the vault directory. Supports a leading `~/` which is
     /// expanded to the user's home. `None` means "use the default
@@ -37,20 +45,23 @@ pub struct Config {
     pub editor_pt: f32,
     /// Editor content column width, in pt.
     pub content_width_pt: f32,
+    /// Sans-serif families tried in priority order, both in egui and in
+    /// the Typst theme template, so plain prose and rendered blocks
+    /// pick up the same face on any given host.
+    pub sans_families: Vec<String>,
+    /// CJK fallback families. Each match is appended to both
+    /// `Proportional` and `Monospace` so egui resolves CJK glyphs the
+    /// primary sans / monospace lack.
+    pub cjk_families: Vec<String>,
     /// Per-token-kind palette used by the syntax highlighter.
     pub colors: SyntaxColors,
+    /// Chrome palette consumed by `style::install_visuals`.
+    pub ui_colors: UiColors,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            vault_path: None,
-            terminal: None,
-            ui_pt: 14.0,
-            editor_pt: 20.0,
-            content_width_pt: 800.0,
-            colors: SyntaxColors::default(),
-        }
+        defaults().clone()
     }
 }
 
@@ -66,9 +77,22 @@ impl Config {
 }
 
 /// Borrow the loaded config. If [`load`] has not been called yet,
-/// returns a process-wide default — every accessor stays usable.
+/// returns the bundled defaults so every accessor stays usable.
 pub fn current() -> &'static Config {
-    CONFIG.get_or_init(Config::default)
+    CONFIG.get_or_init(|| defaults().clone())
+}
+
+/// Borrow the bundled-default `Config`. Parsed once from
+/// `assets/default_config.toml` and reused by the field-level
+/// `Default` impls in [`crate::style`].
+pub fn defaults() -> &'static Config {
+    DEFAULTS.get_or_init(|| {
+        let value: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML)
+            .expect("bundled assets/default_config.toml is malformed TOML");
+        value
+            .try_into()
+            .expect("bundled assets/default_config.toml does not fit the Config schema")
+    })
 }
 
 /// Locate the config file: `$XDG_CONFIG_HOME/vellum/config.toml` (or
@@ -79,8 +103,8 @@ pub fn config_path() -> Option<PathBuf> {
 }
 
 /// Read the config file, falling back to defaults on missing /
-/// malformed input. Writes a commented sample file on first run so
-/// the location and schema are discoverable.
+/// malformed input. Writes the bundled `default_config.toml` to disk on
+/// first run so the location and schema are discoverable.
 ///
 /// Safe to call exactly once at startup; subsequent calls are a no-op
 /// because the `OnceLock` only stores the first value.
@@ -104,24 +128,26 @@ fn read_or_default() -> Config {
         return Config::default();
     }
 
-    match std::fs::read_to_string(&path) {
-        Ok(text) => match toml::from_str::<Config>(&text) {
-            Ok(cfg) => {
-                log::info!("config: loaded {}", path.display());
-                cfg
-            }
-            Err(e) => {
-                log::warn!(
-                    "config: parse error in {} ({}); using defaults",
-                    path.display(),
-                    e
-                );
-                Config::default()
-            }
-        },
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
         Err(e) => {
             log::warn!(
                 "config: read error on {} ({}); using defaults",
+                path.display(),
+                e
+            );
+            return Config::default();
+        }
+    };
+
+    match merged_config(&text) {
+        Ok(cfg) => {
+            log::info!("config: loaded {}", path.display());
+            cfg
+        }
+        Err(e) => {
+            log::warn!(
+                "config: parse error in {} ({}); using defaults",
                 path.display(),
                 e
             );
@@ -130,11 +156,47 @@ fn read_or_default() -> Config {
     }
 }
 
+/// Merge the user's TOML text on top of the bundled-default TOML at
+/// `toml::Value` level, then deserialize the result into [`Config`].
+///
+/// Going through `Value` lets the user omit any field (or any whole
+/// table) — the bundled value fills it back in — *without* having to
+/// put `#[serde(default)]` on `Config` / `UiColors` / `SyntaxColors`,
+/// which would cause serde to call `<T as Default>::default()` eagerly
+/// at the start of every deserialization (and so re-enter the
+/// bundled-config `OnceLock` and deadlock).
+fn merged_config(user_text: &str) -> Result<Config, toml::de::Error> {
+    let bundled: toml::Value = toml::from_str(DEFAULT_CONFIG_TOML)
+        .expect("bundled default_config.toml is malformed TOML");
+    let user: toml::Value = toml::from_str(user_text)?;
+    let merged = merge_values(bundled, user);
+    merged.try_into()
+}
+
+/// Recursive table merge: keys present in `overlay` win; tables are
+/// merged key-by-key, everything else is replaced wholesale.
+fn merge_values(base: toml::Value, overlay: toml::Value) -> toml::Value {
+    use toml::Value::Table;
+    match (base, overlay) {
+        (Table(mut b), Table(o)) => {
+            for (k, v) in o {
+                let merged = match b.remove(&k) {
+                    Some(bv) => merge_values(bv, v),
+                    None => v,
+                };
+                b.insert(k, merged);
+            }
+            Table(b)
+        }
+        (_, overlay) => overlay,
+    }
+}
+
 fn write_default_sample(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, DEFAULT_SAMPLE)
+    std::fs::write(path, DEFAULT_CONFIG_TOML)
 }
 
 fn expand_tilde(s: &str) -> PathBuf {
@@ -150,34 +212,3 @@ fn expand_tilde(s: &str) -> PathBuf {
     }
     PathBuf::from(s)
 }
-
-const DEFAULT_SAMPLE: &str = r##"# Vellum configuration.
-# Every field is optional; uncomment to override the default.
-
-# Path to the vault directory. Default: ~/vellum
-# vault_path = "~/notes"
-
-# Preferred terminal for `Ctrl+E` (open in Helix). When unset, the app
-# checks $TERMINAL and then probes alacritty/kitty/foot/wezterm/...
-# terminal = "alacritty"
-
-# Sizing knobs (all in typographic points).
-ui_pt = 14.0
-editor_pt = 20.0
-content_width_pt = 800.0
-
-# Editor syntax colors. Hex strings, with or without leading '#'.
-[colors]
-default        = "#d4d4d4"
-dollar         = "#c586c0"
-hash           = "#4ec9b0"
-heading_marker = "#dcdcaa"
-comment        = "#6a9955"
-string         = "#ce9178"
-number         = "#b5cea8"
-keyword        = "#569cd6"
-ident          = "#9cdcfe"
-punct          = "#808080"
-emphasis       = "#ffd700"
-list_marker    = "#ff8c42"
-"##;

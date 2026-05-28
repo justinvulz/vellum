@@ -1,0 +1,93 @@
+# Vellum default configuration.
+#
+# Compiled into the binary and used as the baseline for every setting.
+# A copy of this file is written to ~/.config/vellum/config.toml on first
+# run; any value you set there overrides what is here. Missing fields in
+# your own config fall back to these defaults.
+#
+# Hex strings; the leading '#' is optional.
+
+# Vault directory. Default: ~/vellum.
+# vault_path = "~/notes"
+
+# Preferred terminal for `Ctrl+E` (open in Helix). When unset, the app
+# checks $TERMINAL and then probes alacritty/kitty/foot/wezterm/...
+# terminal = "alacritty"
+
+# Sizing knobs (all in typographic points).
+ui_pt = 14.0
+editor_pt = 20.0
+content_width_pt = 800.0
+
+# Sans-serif families tried in priority order. The Typst theme uses the
+# same list, so whichever family the host system provides is the one
+# both renderers pick up.
+sans_families = [
+  "Inter",
+  "Noto Sans",
+  "DejaVu Sans",
+  "Liberation Sans",
+  "Ubuntu",
+  "Helvetica",
+  "Arial",
+]
+
+# CJK fallback families. Every match is appended to both Proportional
+# and Monospace so egui can resolve CJK glyphs the primary sans / Hack
+# monospace lack. Ordered roughly by coverage and ubiquity across
+# Linux / macOS / Windows.
+cjk_families = [
+  "Noto Sans CJK SC",
+  "Noto Sans CJK TC",
+  "Noto Sans CJK JP",
+  "Noto Sans CJK KR",
+  "Noto Sans SC",
+  "Noto Sans TC",
+  "Noto Sans JP",
+  "Noto Sans KR",
+  "Source Han Sans SC",
+  "Source Han Sans TC",
+  "Source Han Sans",
+  "PingFang SC",
+  "PingFang TC",
+  "Hiragino Sans",
+  "Microsoft YaHei",
+  "Microsoft JhengHei",
+  "SimSun",
+  "WenQuanYi Micro Hei",
+  "WenQuanYi Zen Hei",
+]
+
+# Chrome palette. Default: ColorHunt 222831393e46948979dfd0b8 —
+#   222831 near-black slate → panel surface
+#   393E46 dark slate       → elevated surface (windows, menus)
+#   948979 warm taupe       → active fill, hover stroke, accent, dim text
+#   DFD0B8 cream            → primary text
+[ui_colors]
+bg          = "#1a1d24"
+panel       = "#222831"
+elevated    = "#393e46"
+hovered     = "#454a55"
+active      = "#948979"
+line        = "#2e333c"
+line_strong = "#948979"
+accent      = "#948979"
+text        = "#dfd0b8"
+text_strong = "#ffffff"
+text_dim    = "#948979"
+
+# Syntax highlighter palette (VS Code Dark+ inspired, with the dollar
+# sign tinted purple to match Typst's math delimiters).
+[colors]
+default        = "#d4d4d4"
+dollar         = "#c586c0"
+hash           = "#4ec9b0"
+heading_marker = "#dcdcaa"
+comment        = "#6a9955"
+string         = "#ce9178"
+number         = "#b5cea8"
+keyword        = "#569cd6"
+ident          = "#9cdcfe"
+punct          = "#808080"
+emphasis       = "#ffd700"
+list_marker    = "#ff8c42"

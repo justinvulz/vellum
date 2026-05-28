@@ -2,6 +2,7 @@
 //! a note's context menu. Emits one of `RenameNote` / `CancelRename`.
 
 use crate::app::{App, AppAction};
+use egui_phosphor::regular as icon;
 
 pub fn show(app: &mut App, ctx: &egui::Context) -> Option<AppAction> {
     let Some(dialog) = app.rename.as_mut() else {
@@ -35,7 +36,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) -> Option<AppAction> {
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("Rename").clicked() || submit {
+                if ui
+                    .button(format!("{}  Rename", icon::PENCIL_SIMPLE))
+                    .clicked()
+                    || submit
+                {
                     let new_stem = dialog.input.trim().to_string();
                     if !new_stem.is_empty() {
                         action = Some(AppAction::RenameNote {

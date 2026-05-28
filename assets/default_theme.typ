@@ -2,9 +2,13 @@
 // with the `vellum://` scheme and opens the matching note.
 //   #line-note("project-a")            -> "project-a"
 //   #line-note("project-a", body: [A]) -> "A"
+//
+// `@@VELLUM_*@@` placeholders are substituted by `vault::ensure_theme`
+// with the hex values from `[ui_colors]` in the user's config, so the
+// rendered Typst output stays in sync with the surrounding egui chrome.
 #let line-note(name, body: none) = link(
   "vellum://" + name,
-  text(fill: rgb("#4a9eff"))[#if body == none { name } else { body }],
+  text(fill: rgb("@@VELLUM_ACCENT@@"))[#if body == none { name } else { body }],
 )
 
 #let al(itm) = {
@@ -27,7 +31,7 @@
 // just keep `typst compile` workable when the file is opened standalone.
 #let template(doc, width: 600pt, size: 16pt) = {
   set page(
-    fill: rgb("#0d0d0d"),
+    fill: rgb("@@VELLUM_PANEL@@"),
     width: width,
     height: auto,
     margin: 4pt,
@@ -65,7 +69,7 @@
     top-edge: "ascender",
     bottom-edge: "descender",
     lang: "en",
-    fill: rgb("#d4d4d4"),
+    fill: rgb("@@VELLUM_TEXT@@"),
     size: size
   )
 
