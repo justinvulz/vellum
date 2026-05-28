@@ -31,6 +31,7 @@ WINIT_UNIX_BACKEND=x11 cargo run
 ## Architecture
 
 - **`app`** — `App` struct, eframe event loop, `AppAction` dispatch, keyboard shortcuts (`shortcut_actions`), file-watcher polling
+- **`config`** — on-disk settings loaded from `~/.config/vellum/config.toml` (`Config` struct, `load()`, `current()` global accessor via `OnceLock`); writes a commented sample on first run; falls back to defaults on missing / malformed input. Hex-string serde adaptor for `egui::Color32`.
 - **`vault`** — vault directory scanning, file CRUD for `.typ` files, default at `~/vellum`; `open_or_init` calls `ensure_directories` / `ensure_manifest` / `ensure_theme`; holds `notes: Vec<PathBuf>` and `folders: Vec<PathBuf>` populated by `rescan`; CRUD: `create_note`, `delete_note`, `create_folder`, `delete_folder`, `move_note(from, to_folder)` (`to_folder: None` moves back to root `note/`), `rename_note(from, new_stem)` (renames within the same folder). Both `move_note` and `rename_note` funnel through `relocate(from, to)`, which calls `search::rewrite_link_targets` against every other note to keep `#line-note` references pointing at the relocated file.
 - **`editor/`** — editor subsystem:
   - **`segment`** — tree-based splitter; walks `typst::syntax::parse` output and emits one segment per heading / block-math / top-level `#`-code (alone on its line) / text paragraph
@@ -41,7 +42,7 @@ WINIT_UNIX_BACKEND=x11 cargo run
 - **`external_editor`** — `open_in_helix(path)` spawns an external terminal running `hx <file>`
 - **`file_watcher`** — `FileWatcher` reports external `.typ` changes; `App::poll_watcher` consumes them
 - **`search`** — content search; regex-extracts `#line-note("X")` calls from every note for the backlink index (`HashMap<PathBuf, Vec<PathBuf>>`, keyed on the *target* note's path so stem and path-qualified link forms collapse to the same entry); `find_note_by_stem(vault, name)` resolves a link target to a `PathBuf` — if `name` contains `/` it is treated as a vault-relative path (`"ideas/foo"` → `note/ideas/foo.typ`), otherwise falls back to case-insensitive stem match (first alphabetically wins)
-- **`style`** — fonts, text styles, sizing constants (`UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`), the edit-mode accent outline (`paint_edit_outline`), and the editor config types (`EditorConfig`, `SyntaxColors`)
+- **`style`** — fonts, text styles, sizing accessors (`ui_pt()`, `editor_pt()`, `content_width_pt()` — backed by `config::current()`), the edit-mode accent outline (`paint_edit_outline`), and the editor config types (`EditorConfig`, `SyntaxColors`). `SyntaxColors` is serde-derived with a `color_hex` adaptor module for `egui::Color32 ↔ "#rrggbb"`.
 - **`ui/`** — egui panels: `topbar`, `vault_explorer`, `editor_view`, `backlinks_panel`, `rename_dialog` (modal opened from a note's context menu → `AppAction::StartRename` → `RenameNote { from, new_stem }`)
 - **Debug tracing** — `log` + `env_logger` initialised in `main`; default filter `info,vellum=debug`, overridable via `RUST_LOG`
 
@@ -156,12 +157,21 @@ The sidebar is a VS Code-style file tree (`ui::vault_explorer`):
 
 ### Config
 
-No on-disk config file yet. Two layers of in-code tunables:
+On-disk config at `~/.config/vellum/config.toml` (path from `dirs::config_dir()`). Loaded once by `config::load()` in `main` and stored in a `OnceLock<Config>` so `config::current()` is callable from anywhere. Missing file → write a commented sample and use defaults. Malformed file → log a warning and use defaults.
 
-- **Global style** — constants in `src/style.rs`: `UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`, `SANS_FAMILIES`, `EDIT_OUTLINE_COLOR`.
-- **Per-editor** — `style::EditorConfig` exposed as `MixedEditor::config` (font, `line_space`, `SyntaxColors`); mutate at runtime to retheme.
+Fields (all optional, with `#[serde(default)]`):
 
-External-editor selection is overridden via the `$TERMINAL` env var (handled in `external_editor.rs`). Logging filter via `RUST_LOG` (default `info,vellum=debug`).
+- `vault_path: Option<String>` — overrides `~/vellum`. Leading `~/` expands to home.
+- `terminal: Option<String>` — preferred Helix terminal; checked before `$TERMINAL` and the auto-detect list.
+- `ui_pt`, `editor_pt`, `content_width_pt: f32` — sizing knobs. Consumed via `style::ui_pt()` etc.
+- `colors: SyntaxColors` — syntax highlighter palette. Each `egui::Color32` field round-trips through hex strings via the `style::color_hex` serde adaptor.
+
+In-code, hard-coded tunables (not exposed via config):
+
+- `SANS_FAMILIES`, `CJK_FAMILIES`, `EDIT_OUTLINE_COLOR` in `src/style.rs`.
+- `EDIT_FONT_SCALE`, `SEGMENT_GAP`, `TOP_PADDING`, `FRAME_COMPILE_BUDGET_MS`, caret blink/hold constants in `src/editor/mixed.rs`.
+
+Other knobs: `$TERMINAL` env var still works as a fallback in `external_editor.rs`. Logging filter via `RUST_LOG` (default `info,vellum=debug`).
 
 ## Key Shortcuts
 

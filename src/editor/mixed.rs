@@ -6,7 +6,7 @@ use super::highlight;
 use super::preamble;
 use super::segment;
 use super::typst_engine::{RenderedPage, TypstEngine, PIXEL_PER_PT};
-use crate::style::{self, CONTENT_WIDTH_PT, EditorConfig};
+use crate::style::{self, EditorConfig, content_width_pt};
 use std::collections::HashMap;
 
 /// Vertical gap between adjacent segments, in egui points.
@@ -350,7 +350,7 @@ fn show_editing(
     let output = egui::TextEdit::multiline(text)
         .id(seg_id)
         .font(font_id.clone())
-        .desired_width(CONTENT_WIDTH_PT)
+        .desired_width(content_width_pt())
         .desired_rows(1)
         .frame(egui::Frame::NONE.inner_margin(inner_margin))
         .margin(inner_margin)
@@ -500,18 +500,19 @@ fn show_rendered(ui: &mut egui::Ui, page: &RenderedPage) -> SegmentClick {
 /// Scrollable, centred, fixed-width content column. All segments lay
 /// out inside this column so plain text and rendered Typst blocks
 /// share one width; the outer `ScrollArea` handles overflow when the
-/// viewport is narrower than `CONTENT_WIDTH_PT`.
+/// viewport is narrower than the configured column width.
 fn show_content_column(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
+    let width = content_width_pt();
     egui::ScrollArea::both()
         .id_salt("mixed-scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            let padding = ((ui.available_width() - CONTENT_WIDTH_PT) / 2.0).max(0.0);
+            let padding = ((ui.available_width() - width) / 2.0).max(0.0);
             ui.horizontal_top(|ui| {
                 ui.add_space(padding);
                 ui.vertical(|ui| {
-                    ui.set_min_width(CONTENT_WIDTH_PT);
-                    ui.set_max_width(CONTENT_WIDTH_PT);
+                    ui.set_min_width(width);
+                    ui.set_max_width(width);
                     content(ui);
                 });
             });

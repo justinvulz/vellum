@@ -1,19 +1,31 @@
 //! App-wide font and text-size setup. Loads a system sans-serif into egui
 //! and exposes the same family name to the Typst theme template so plain
 //! text and rendered blocks share a single font.
+//!
+//! Sizing accessors ([`ui_pt`], [`editor_pt`], [`content_width_pt`]) read
+//! from the user config loaded by [`crate::config`], so overrides in
+//! `~/.config/vellum/config.toml` flow through to every consumer.
+
+use serde::{Deserialize, Serialize};
 
 /// Chrome size (topbar, sidebar, buttons, status line), in points.
-pub const UI_PT: f32 = 14.0;
+pub fn ui_pt() -> f32 {
+    crate::config::current().ui_pt
+}
 
 /// Mixed-editor body size, in points. Threaded into the Typst theme
 /// template (via `template.with(size: …)`) and applied to the editor's
 /// `TextEdit`s — single source of truth for plain and rendered blocks.
-pub const EDITOR_PT: f32 = 20.0;
+pub fn editor_pt() -> f32 {
+    crate::config::current().editor_pt
+}
 
 /// Width of the editor content column, in points. Threaded into the
 /// Typst theme template (via `template.with(width: …)`) and enforced on
 /// the surrounding egui layout so plain paragraphs share the column.
-pub const CONTENT_WIDTH_PT: f32 = 800.0;
+pub fn content_width_pt() -> f32 {
+    crate::config::current().content_width_pt
+}
 
 /// Sans-serif families to try, in priority order. The Typst theme uses
 /// the same list, so whichever family the host system provides is the
@@ -94,14 +106,15 @@ pub struct EditorConfig {
 
 impl Default for EditorConfig {
     fn default() -> Self {
+        let size = editor_pt();
         Self {
-            font_size: EDITOR_PT,
+            font_size: size,
             font_family: egui::FontFamily::Monospace,
             // 0.65 × font_size mirrors Typst's default `par.leading`.
             // The caret stays at `font_size` regardless — `MixedEditor`
             // suppresses egui's full-row caret and paints its own.
-            line_space: Some(EDITOR_PT * 0.65),
-            colors: SyntaxColors::default(),
+            line_space: Some(size * 0.65),
+            colors: crate::config::current().colors.clone(),
         }
     }
 }
@@ -109,32 +122,76 @@ impl Default for EditorConfig {
 /// Foreground colours for individual Typst syntax-tree leaf kinds.
 /// `editor::highlight` walks the parser's tree and looks each leaf up
 /// here; anything not specifically matched falls back to `default`.
-#[derive(Clone, Debug)]
+///
+/// Serialised as hex strings (`"#rrggbb"`) so the on-disk config file
+/// stays human-readable.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SyntaxColors {
+    #[serde(with = "color_hex")]
     pub default: egui::Color32,
     /// `$` math delimiters.
+    #[serde(with = "color_hex")]
     pub dollar: egui::Color32,
     /// `#` markup-to-code transition.
+    #[serde(with = "color_hex")]
     pub hash: egui::Color32,
     /// `=` / `==` / … heading markers.
+    #[serde(with = "color_hex")]
     pub heading_marker: egui::Color32,
     /// `// …` and `/* … */`.
+    #[serde(with = "color_hex")]
     pub comment: egui::Color32,
     /// `"…"` string literals (in code mode).
+    #[serde(with = "color_hex")]
     pub string: egui::Color32,
     /// Numeric literals (int / float / numeric / bool).
+    #[serde(with = "color_hex")]
     pub number: egui::Color32,
     /// Keywords: `let`, `set`, `show`, `if`, `for`, `import`, …
+    #[serde(with = "color_hex")]
     pub keyword: egui::Color32,
     /// Identifiers in code / math mode.
+    #[serde(with = "color_hex")]
     pub ident: egui::Color32,
     /// Brackets, commas, semicolons.
+    #[serde(with = "color_hex")]
     pub punct: egui::Color32,
     /// `*` and `_` markers (markup emphasis).
+    #[serde(with = "color_hex")]
     pub emphasis: egui::Color32,
     /// `-` / `+` / `/` list / enum / term markers.
+    #[serde(with = "color_hex")]
     pub list_marker: egui::Color32,
 }
+
+/// Serde adaptor: `egui::Color32` ⇄ `"#rrggbb"` hex strings.
+/// `"rrggbb"` (without the leading `#`) is also accepted on input.
+mod color_hex {
+    use egui::Color32;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(c: &Color32, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Color32, D::Error> {
+        let raw = String::deserialize(d)?;
+        let hex = raw.trim().trim_start_matches('#');
+        if hex.len() != 6 {
+            return Err(serde::de::Error::custom(format!(
+                "expected 6 hex digits, got {:?}",
+                raw
+            )));
+        }
+        let parse = |i: usize| {
+            u8::from_str_radix(&hex[i..i + 2], 16)
+                .map_err(|e| serde::de::Error::custom(format!("invalid hex {:?}: {}", &hex[i..i + 2], e)))
+        };
+        Ok(Color32::from_rgb(parse(0)?, parse(2)?, parse(4)?))
+    }
+}
+
 
 impl Default for SyntaxColors {
     fn default() -> Self {
@@ -201,26 +258,27 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 
     use egui::{FontFamily, FontId, TextStyle};
+    let ui = ui_pt();
     let mut style = (*ctx.global_style()).clone();
     style.text_styles.insert(
         TextStyle::Heading,
-        FontId::new(UI_PT * 1.4, FontFamily::Proportional),
+        FontId::new(ui * 1.4, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Body,
-        FontId::new(UI_PT, FontFamily::Proportional),
+        FontId::new(ui, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Button,
-        FontId::new(UI_PT, FontFamily::Proportional),
+        FontId::new(ui, FontFamily::Proportional),
     );
     style.text_styles.insert(
         TextStyle::Monospace,
-        FontId::new(UI_PT, FontFamily::Monospace),
+        FontId::new(ui, FontFamily::Monospace),
     );
     style.text_styles.insert(
         TextStyle::Small,
-        FontId::new((UI_PT - 2.0).max(10.0), FontFamily::Proportional),
+        FontId::new((ui - 2.0).max(10.0), FontFamily::Proportional),
     );
     ctx.set_global_style(style);
 }

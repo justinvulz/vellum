@@ -164,11 +164,17 @@ Unresolved targets set the status line to `note not found: X`. A pointing-hand c
 
 ## Config
 
-- No on-disk config file yet. Two layers of in-code tunables:
-  - **Global style** — constants in `src/style.rs`: `UI_PT`, `EDITOR_PT`, `CONTENT_WIDTH_PT`, `SANS_FAMILIES`, `EDIT_OUTLINE_COLOR`.
-  - **Per-editor** — `style::EditorConfig` (font, `line_space`, `SyntaxColors`) exposed as `MixedEditor::config`; mutate at runtime to retheme.
+- **On-disk**: `~/.config/vellum/config.toml` (via `dirs::config_dir()`). Loaded once at startup by `config::load()` and cached in a `OnceLock<Config>`; every later read goes through `config::current()`. The file is created with commented defaults on first run; missing or malformed input falls back to defaults with a warning.
+- **Fields** (all optional, `#[serde(default)]`):
+  - `vault_path: Option<String>` — overrides `~/vellum` (leading `~/` is expanded).
+  - `terminal: Option<String>` — preferred terminal for the Helix integration.
+  - `ui_pt`, `editor_pt`, `content_width_pt: f32` — sizing knobs.
+  - `colors: SyntaxColors` — per-token-kind palette; each `egui::Color32` round-trips through hex strings via a `style::color_hex` serde adaptor.
+- **Style accessors**: `style::ui_pt()`, `style::editor_pt()`, `style::content_width_pt()` read from `config::current()`, so a single load at startup propagates to every consumer.
+- **Per-editor**: `style::EditorConfig` (font, `line_space`, `SyntaxColors`) exposed as `MixedEditor::config`; `Default::default()` seeds it from the loaded config. Mutate at runtime for live retheming.
+- **Other knobs not (yet) on disk**: `SANS_FAMILIES`, `CJK_FAMILIES`, `EDIT_OUTLINE_COLOR` in `src/style.rs`; per-frame compile budget and caret timing in `src/editor/mixed.rs`.
 - **Logging**: `RUST_LOG` overrides the default `info,vellum=debug` filter (`env_logger`). Traces cover vault open/scan, note open/save/reload, segment parsing, render bursts, compile errors, file-watcher events, and Helix launches.
-- **External editor**: `$TERMINAL` env var overrides the auto-detection order in `external_editor.rs`.
+- **External editor priority**: `config.terminal` → `$TERMINAL` env var → auto-detect order in `external_editor.rs`.
 
 ## Dependencies
 
@@ -186,10 +192,9 @@ Unresolved targets set the status line to `note not found: X`. A pointing-hand c
 | `dirs`             | Resolve `~/vellum` vault path                    |
 | `anyhow`           | Error handling                                   |
 | `log` + `env_logger` | Structured debug tracing                       |
-| `serde/toml`       | (Reserved for future on-disk config)             |
+| `serde/toml`       | On-disk config file (`~/.config/vellum/config.toml`) |
 
 ## Future Work
 
 - Tantivy full-text index (blocked on zstd dependency conflict)
 - Optional git sync (init/commit/push/pull from the UI)
-- On-disk config (vault path, terminal, Helix theme, sizing knobs)

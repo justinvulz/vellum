@@ -17,11 +17,13 @@ pub fn open_in_helix(path: &Path) -> Result<()> {
         ("xterm", &["-e"]),
     ];
 
-    let preferred = std::env::var("TERMINAL").ok();
+    // Priority: config.terminal → $TERMINAL → auto-detect order.
+    let cfg_pref = crate::config::current().terminal.clone();
+    let env_pref = std::env::var("TERMINAL").ok();
+    let preferred: Vec<String> = cfg_pref.into_iter().chain(env_pref).collect();
     let ordered: Vec<(&str, &[&str])> = preferred
-        .as_deref()
-        .and_then(|p| candidates.iter().find(|(n, _)| *n == p).copied())
-        .into_iter()
+        .iter()
+        .filter_map(|p| candidates.iter().find(|(n, _)| *n == p).copied())
         .chain(candidates.iter().copied())
         .collect();
 

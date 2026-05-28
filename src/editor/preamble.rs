@@ -8,7 +8,7 @@
 //! Every render body is also wrapped in the theme template so plain
 //! prose and rendered blocks share styling.
 
-use crate::style::{CONTENT_WIDTH_PT, EDITOR_PT};
+use crate::style::{content_width_pt, editor_pt};
 
 /// True when every line is a preamble line: `#let`, `#import`,
 /// `#set`, `#show`, a `//` line comment, or blank.
@@ -57,9 +57,11 @@ pub fn merge_leading(segments: &mut Vec<String>) {
 /// without an explicit `#import`. Clicks on the resulting link are
 /// captured by the app (the URL uses the `vellum://` scheme).
 pub fn wrap_for_render(body: &str) -> String {
+    let width = content_width_pt();
+    let size = editor_pt();
     format!(
         "#import \"/asset/theme.typ\": template, line-note\n\
-         #show: template.with(width: {CONTENT_WIDTH_PT}pt, size: {EDITOR_PT}pt)\n\
+         #show: template.with(width: {width}pt, size: {size}pt)\n\
          \n{body}\n"
     )
 }

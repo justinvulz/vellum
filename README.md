@@ -135,6 +135,17 @@ On first launch Vellum creates `~/vellum/`:
 | `Ctrl+S` | Save current note          |
 | `Ctrl+E` | Open current note in Helix |
 
+## Config
+
+On first launch Vellum writes a commented sample to `~/.config/vellum/config.toml`. Every field is optional:
+
+- `vault_path` — override the default `~/vellum` location (leading `~/` is expanded).
+- `terminal` — preferred terminal for `Ctrl+E` (falls back to `$TERMINAL`, then auto-detection).
+- `ui_pt`, `editor_pt`, `content_width_pt` — sizing knobs, in typographic points.
+- `[colors]` — syntax-highlighter palette, hex strings like `"#d4d4d4"`.
+
+A malformed file logs a warning and is treated as if absent — the app never refuses to start.
+
 ## Development
 
 ```sh

@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod editor;
 mod external_editor;
 mod file_watcher;
@@ -20,7 +21,11 @@ fn main() -> Result<()> {
     .init();
     log::info!("vellum starting");
 
-    let root = vault::default_vault_dir();
+    // Load on-disk config *before* anything reads the style/config
+    // accessors so the first call to `config::current()` returns the
+    // user's overrides rather than baking in the defaults.
+    let cfg = config::load();
+    let root = cfg.vault_dir();
     let vault = Vault::open_or_init(root)?;
 
     let native_options = eframe::NativeOptions {
