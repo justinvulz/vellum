@@ -15,16 +15,19 @@ egui = "0.34"
 egui-phosphor = { version = "0.12", default-features = false, features = ["regular"] }
 egui_ltreeview = "0.7"
 walkdir = "2"
-notify = "6"
+notify = "8"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1"
 anyhow = "1"
 regex = "1"
-dirs = "5"
+dirs = "6"
 typst = "0.14"
 typst-render = "0.14"
 typst-assets = { version = "0.14", features = ["fonts"] }
+# Pinned to 0.4 to match typst 0.14's internal `comemo` cache —
+# `comemo::evict(0)` in `typst_engine` only flushes the cache that
+# typst's macros actually populate when the versions agree.
 comemo = "0.4"
-fontdb = "0.16"
+fontdb = "0.23"
 log = "0.4"
 env_logger = "0.11"
