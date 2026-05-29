@@ -325,20 +325,11 @@ fn clean_relative(name: &str) -> Result<PathBuf> {
 /// confusing compile errors when the app passes new arguments to
 /// `template.with(...)`.
 ///
-/// `@@VELLUM_*@@` placeholders in the embedded template are replaced
-/// with hex values from [`crate::config::current().ui_colors`] so the
-/// Typst page background / body text / link colour stay in sync with
-/// the egui chrome.
+/// The bg / text / link colours that go with the chrome are *not*
+/// baked in here; `editor::preamble::wrap_for_render` threads them
+/// through `template.with(...)` on every compile so the rendered
+/// output tracks `[ui_colors]` without needing this file rewritten.
 fn ensure_theme(root: &Path) -> Result<()> {
-    let c = &crate::config::current().ui_colors;
-    let theme = DEFAULT_THEME
-        .replace("@@VELLUM_PANEL@@", &hex(c.panel))
-        .replace("@@VELLUM_TEXT@@", &hex(c.text))
-        .replace("@@VELLUM_ACCENT@@", &hex(c.accent));
     let theme_path = root.join("asset").join("theme.typ");
-    fs::write(&theme_path, theme).context("writing theme template")
-}
-
-fn hex(c: egui::Color32) -> String {
-    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
+    fs::write(&theme_path, DEFAULT_THEME).context("writing theme template")
 }

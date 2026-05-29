@@ -172,7 +172,7 @@ Unresolved targets set the status line to `note not found: X`. A pointing-hand c
   - `sans_families: Vec<String>` — sans-serif faces tried in priority order, both in egui and the Typst theme.
   - `cjk_families: Vec<String>` — CJK fallback faces appended to both Proportional and Monospace.
   - `colors: SyntaxColors` — per-token-kind palette (12 hex fields); each `egui::Color32` round-trips through hex strings via a `style::color_hex` serde adaptor.
-  - `ui_colors: UiColors` — chrome palette (11 hex fields driving `style::install_visuals`; three values — `panel`, `text`, `accent` — are also substituted into the Typst theme by `vault::ensure_theme`).
+  - `ui_colors: UiColors` — chrome palette (11 hex fields driving `style::install_visuals`; three values — `panel`, `text`, `accent` — are also threaded into every Typst compile by `editor::preamble::wrap_for_render` as the `bg` / `text-color` / `link-color` arguments to `template.with(...)`).
 - **Style accessors**: `style::ui_pt()`, `style::editor_pt()`, `style::content_width_pt()`, `style::accent()` read from `config::current()`, so a single load at startup propagates to every consumer.
 - **Per-editor**: `style::EditorConfig` (font, `line_space`, `SyntaxColors`) exposed as `MixedEditor::config`; `Default::default()` seeds it from the loaded config. Mutate at runtime for live retheming.
 - **Other knobs not (yet) on disk**: per-frame compile budget and caret timing in `src/editor/mixed.rs`; corner radii, shadow tuning, and spacing in `style::install_visuals`.

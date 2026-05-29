@@ -10,6 +10,10 @@
 
 use crate::style::{content_width_pt, editor_pt};
 
+fn hex(c: egui::Color32) -> String {
+    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
+}
+
 /// True when every line is a preamble line: `#let`, `#import`,
 /// `#set`, `#show`, a `//` line comment, or blank.
 pub fn is_preamble_only(text: &str) -> bool {
@@ -51,17 +55,34 @@ pub fn merge_leading(segments: &mut Vec<String>) {
 }
 
 /// Wrap a snippet body in the theme template, threading the editor's
-/// content width and body size through `template.with(...)`.
+/// content width, body size, and chrome colours through
+/// `template.with(...)`.
 ///
 /// `line-note` is co-imported so user code can write `#line-note("X")`
 /// without an explicit `#import`. Clicks on the resulting link are
 /// captured by the app (the URL uses the `vellum://` scheme).
+///
+/// `bg` / `text-color` / `link-color` come from
+/// `config::current().ui_colors` — `panel`, `text`, `accent` — so the
+/// rendered Typst output stays in sync with the surrounding egui chrome
+/// without having to rewrite `~/vellum/asset/theme.typ` on every
+/// colour-config change.
 pub fn wrap_for_render(body: &str) -> String {
     let width = content_width_pt();
     let size = editor_pt();
+    let c = &crate::config::current().ui_colors;
+    let bg = hex(c.panel);
+    let text = hex(c.text);
+    let link = hex(c.accent);
     format!(
         "#import \"/asset/theme.typ\": template, line-note\n\
-         #show: template.with(width: {width}pt, size: {size}pt)\n\
+         #show: template.with(\
+            width: {width}pt, \
+            size: {size}pt, \
+            bg: rgb(\"{bg}\"), \
+            text-color: rgb(\"{text}\"), \
+            link-color: rgb(\"{link}\"),\
+         )\n\
          \n{body}\n"
     )
 }

@@ -126,7 +126,7 @@ On first launch Vellum creates `~/vellum/`:
     theme.typ       ← dark theme (regenerated each launch)
 ```
 
-> `theme.typ` is rewritten on every launch. To customise the template, edit `assets/default_theme.typ` in this repo and rebuild. The page fill, body text colour, and `#line-note` link colour come from your `[ui_colors]` config — those three values are substituted into the template at write time so rendered blocks match the surrounding UI.
+> `theme.typ` is rewritten on every launch. To customise the template, edit `assets/default_theme.typ` in this repo and rebuild. The page fill, body text colour, and `#line-note` link colour come from your `[ui_colors]` config — they are passed in as `template.with(bg: …, text-color: …, link-color: …)` arguments on every compile, so rendered blocks match the surrounding UI without rewriting the theme file.
 
 ## Shortcuts
 

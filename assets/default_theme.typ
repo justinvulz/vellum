@@ -1,14 +1,13 @@
 // Inline link to another note in this vault. The app intercepts URLs
-// with the `vellum://` scheme and opens the matching note.
+// with the `vellum://` scheme and opens the matching note. The link
+// colour is applied by `template`'s `show link: set text(fill: ...)`
+// rule below, so changing `link-color` on the template call retints
+// every #line-note in the document.
 //   #line-note("project-a")            -> "project-a"
 //   #line-note("project-a", body: [A]) -> "A"
-//
-// `@@VELLUM_*@@` placeholders are substituted by `vault::ensure_theme`
-// with the hex values from `[ui_colors]` in the user's config, so the
-// rendered Typst output stays in sync with the surrounding egui chrome.
 #let line-note(name, body: none) = link(
   "vellum://" + name,
-  text(fill: rgb("@@VELLUM_ACCENT@@"))[#if body == none { name } else { body }],
+  if body == none { name } else { body },
 )
 
 #let al(itm) = {
@@ -27,11 +26,20 @@
   )
 }
 
-// Width and size are passed in by the app (see style.rs); defaults here
-// just keep `typst compile` workable when the file is opened standalone.
-#let template(doc, width: 600pt, size: 16pt) = {
+// `width`, `size`, `bg`, `text-color`, and `link-color` are all passed
+// in by the app (see editor::preamble::wrap_for_render); the defaults
+// match assets/default_config.toml so `typst compile` produces
+// something coherent when the file is opened standalone.
+#let template(
+  doc,
+  width: 600pt,
+  size: 16pt,
+  bg: rgb("#222831"),
+  text-color: rgb("#dfd0b8"),
+  link-color: rgb("#948979"),
+) = {
   set page(
-    fill: rgb("@@VELLUM_PANEL@@"),
+    fill: bg,
     width: width,
     height: auto,
     margin: 4pt,
@@ -47,9 +55,10 @@
       "Ubuntu",
       "Helvetica",
       "Arial",
-      // CJK fallbacks — kept in sync with style::CJK_FAMILIES so plain
-      // and rendered blocks resolve the same glyphs. Typst's font list
-      // is per-codepoint fallback, so Latin still picks an earlier face.
+      // CJK fallbacks — kept in sync with the default cjk_families list
+      // in assets/default_config.toml so plain and rendered blocks
+      // resolve the same glyphs. Typst's font list is per-codepoint
+      // fallback, so Latin still picks an earlier face.
       "Noto Sans SC",
       "Noto Sans TC",
       "Noto Sans JP",
@@ -69,9 +78,13 @@
     top-edge: "ascender",
     bottom-edge: "descender",
     lang: "en",
-    fill: rgb("@@VELLUM_TEXT@@"),
+    fill: text-color,
     size: size
   )
+
+  // One rule covers every `#link(...)` in the document — including
+  // `#line-note(...)`, which is defined above as a plain `link`.
+  show link: set text(fill: link-color)
 
   set heading(numbering: "1.")
   // set heading(numbering: "あ.")
