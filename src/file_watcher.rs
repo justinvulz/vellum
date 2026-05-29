@@ -1,7 +1,7 @@
 //! Notifies the app of external `.typ` file changes inside the vault.
 
 use anyhow::Result;
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
@@ -29,6 +29,20 @@ impl FileWatcher {
         loop {
             match self.rx.try_recv() {
                 Ok(Ok(event)) => {
+                    // `notify` 8 on Linux delivers `Access(Close(...))`
+                    // events whenever a file is read+closed — including the
+                    // reads the app does to populate the sidebar. Reacting
+                    // to those would feed a reload → read → event loop.
+                    // Only structural changes and content writes should
+                    // count as "changed".
+                    if !matches!(
+                        event.kind,
+                        EventKind::Create(_)
+                            | EventKind::Modify(_)
+                            | EventKind::Remove(_)
+                    ) {
+                        continue;
+                    }
                     for path in event.paths {
                         if path.extension().and_then(|s| s.to_str()) == Some("typ") {
                             changed.push(path);
