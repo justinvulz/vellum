@@ -7,6 +7,8 @@
 //! `~/.config/vellum/config.toml` flow through to every consumer.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Chrome size (topbar, sidebar, buttons, status line), in points.
 pub fn ui_pt() -> f32 {
@@ -184,9 +186,17 @@ fn install_fonts(ctx: &egui::Context) {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
 
+    // Cache of font-file bytes by path. Many CJK fallbacks (Noto Sans
+    // CJK SC/TC/JP/KR) all live in the same .ttc collection; without
+    // this each call would `std::fs::read` the whole 80 MB file again.
+    // Entries are `Box::leak`'d so we can hand `&'static [u8]` to
+    // `FontData::from_static`, which lets every face share the bytes
+    // instead of egui copying them via `FontData::from_owned`.
+    let mut file_bytes: HashMap<PathBuf, &'static [u8]> = HashMap::new();
+
     let cfg = crate::config::current();
     for family in &cfg.sans_families {
-        if let Some(key) = load_face(&db, &mut fonts, family) {
+        if let Some(key) = load_face(&db, &mut fonts, &mut file_bytes, family) {
             fonts
                 .families
                 .entry(egui::FontFamily::Proportional)
@@ -203,7 +213,7 @@ fn install_fonts(ctx: &egui::Context) {
 
     let mut cjk_loaded: Vec<String> = Vec::new();
     for family in &cfg.cjk_families {
-        if let Some(key) = load_face(&db, &mut fonts, family) {
+        if let Some(key) = load_face(&db, &mut fonts, &mut file_bytes, family) {
             cjk_loaded.push(key);
         }
     }
@@ -401,6 +411,7 @@ pub fn soft_separator(ui: &mut egui::Ui) {
 fn load_face(
     db: &fontdb::Database,
     fonts: &mut egui::FontDefinitions,
+    file_bytes: &mut HashMap<PathBuf, &'static [u8]>,
     family: &str,
 ) -> Option<String> {
     let query = fontdb::Query {
@@ -415,13 +426,23 @@ fn load_face(
     if fonts.font_data.contains_key(&key) {
         return Some(key);
     }
-    let data = match &face.source {
-        fontdb::Source::File(path) => std::fs::read(path).ok()?,
+    let bytes: &'static [u8] = match &face.source {
+        fontdb::Source::File(path) => {
+            if let Some(&b) = file_bytes.get(path) {
+                b
+            } else {
+                let data = std::fs::read(path).ok()?;
+                let leaked: &'static [u8] = Box::leak(data.into_boxed_slice());
+                file_bytes.insert(path.clone(), leaked);
+                leaked
+            }
+        }
         fontdb::Source::Binary(bytes) | fontdb::Source::SharedFile(_, bytes) => {
-            bytes.as_ref().as_ref().to_vec()
+            let v: Vec<u8> = bytes.as_ref().as_ref().to_vec();
+            Box::leak(v.into_boxed_slice())
         }
     };
-    let mut font_data = egui::FontData::from_owned(data);
+    let mut font_data = egui::FontData::from_static(bytes);
     font_data.index = face.index;
     fonts.font_data.insert(key.clone(), font_data.into());
     Some(key)
