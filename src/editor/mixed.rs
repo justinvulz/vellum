@@ -43,6 +43,14 @@ pub struct MixedEditor {
     /// `ui.input().time` of the last keystroke in any segment. Used to
     /// hold the caret solid while the user is actively typing.
     last_typed: f64,
+    /// Wrapped Typst source per segment (template + preamble + body),
+    /// parallel to `segments`. Also the render-cache key. Rebuilt only
+    /// when `cache_dirty` is set, so idle frames skip the preamble walk
+    /// and the per-segment `format!()`-heavy template wrap.
+    cached_effective: Vec<String>,
+    /// Set whenever `segments` is mutated so the next `show()` rebuilds
+    /// `cached_effective`.
+    cache_dirty: bool,
 }
 
 /// What a click on a rendered segment means.
@@ -83,6 +91,8 @@ impl MixedEditor {
             config: EditorConfig::default(),
             pending_focus: None,
             last_typed: f64::NEG_INFINITY,
+            cached_effective: Vec::new(),
+            cache_dirty: true,
         }
     }
 
@@ -94,6 +104,7 @@ impl MixedEditor {
         }
         self.editing_index = None;
         self.dirty = false;
+        self.cache_dirty = true;
         log::debug!(
             "mixed: load {} bytes -> {} segments",
             source.len(),
@@ -118,9 +129,16 @@ impl MixedEditor {
     ) -> Option<String> {
         if self.segments.is_empty() {
             self.segments.push(String::new());
+            self.cache_dirty = true;
         }
 
-        let effective = self.effective_sources();
+        self.refresh_effective_cache();
+        // Move the cached vec out so the `show_segment` loop can take
+        // `&mut self` without conflicting with `&effective[i]` borrows.
+        // Restored before `apply_frame_state` runs; if the loop set
+        // `cache_dirty = true`, the next frame rebuilds it regardless
+        // of these contents.
+        let effective = std::mem::take(&mut self.cached_effective);
         self.evict_stale(&effective);
         self.ensure_rendered(ctx, engine, &effective);
         let pending = self.pending_focus.take();
@@ -143,26 +161,29 @@ impl MixedEditor {
             }
         });
 
+        self.cached_effective = effective;
         self.apply_frame_state(ctx, state);
         nav
     }
 
-    /// Wrapped Typst source per segment (template + preamble + body).
-    /// Also serves as the render-cache key.
-    fn effective_sources(&self) -> Vec<String> {
+    /// Rebuild `cached_effective` (template + preamble + body per
+    /// segment) when `cache_dirty` is set. A no-op on idle frames.
+    fn refresh_effective_cache(&mut self) {
+        if !self.cache_dirty {
+            return;
+        }
         let (preamble_text, preamble_count) = preamble::collect(&self.segments);
-        self.segments
-            .iter()
-            .enumerate()
-            .map(|(i, body)| {
-                let composed = if i < preamble_count || preamble_text.is_empty() {
-                    body.clone()
-                } else {
-                    format!("{preamble_text}\n\n{body}")
-                };
-                preamble::wrap_for_render(&composed)
-            })
-            .collect()
+        self.cached_effective.clear();
+        self.cached_effective.reserve(self.segments.len());
+        for (i, body) in self.segments.iter().enumerate() {
+            let composed = if i < preamble_count || preamble_text.is_empty() {
+                body.clone()
+            } else {
+                format!("{preamble_text}\n\n{body}")
+            };
+            self.cached_effective.push(preamble::wrap_for_render(&composed));
+        }
+        self.cache_dirty = false;
     }
 
     /// Drop cached renders whose key no longer matches any live segment.
@@ -172,8 +193,32 @@ impl MixedEditor {
     /// the lifetime of the session.
     fn evict_stale(&mut self, effective: &[String]) {
         let live: HashSet<&str> = effective.iter().map(String::as_str).collect();
+        let before = self.renders.len();
         self.renders.retain(|k, _| live.contains(k.as_str()));
         self.failed.retain(|k, _| live.contains(k.as_str()));
+        let after = self.renders.len();
+        if before != after {
+            log::debug!(
+                "renders cache: {} entries, {:.1} MB ({} evicted)",
+                after,
+                self.renders_bytes() as f64 / (1024.0 * 1024.0),
+                before - after,
+            );
+        }
+    }
+
+    /// CPU-side bytes held by every cached `RenderedPage` texture
+    /// (width × height × 4 RGBA bytes). egui keeps the image in the
+    /// `TextureHandle` for re-upload on context loss, so this is the
+    /// per-process heap cost; the GPU holds an equivalent copy.
+    fn renders_bytes(&self) -> usize {
+        self.renders
+            .values()
+            .map(|p| {
+                let [w, h] = p.texture.size();
+                w * h * 4
+            })
+            .sum()
     }
 
     fn ensure_rendered(
@@ -189,6 +234,7 @@ impl MixedEditor {
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_millis(FRAME_COMPILE_BUDGET_MS);
         let mut any_pending = false;
+        let mut inserts = 0usize;
 
         for key in effective {
             if self.renders.contains_key(key) || self.failed.contains_key(key) {
@@ -201,6 +247,7 @@ impl MixedEditor {
             match engine.render(ctx, key) {
                 Ok(tex) => {
                     self.renders.insert(key.clone(), tex);
+                    inserts += 1;
                 }
                 Err(e) => {
                     let msg = format!("{e:#}");
@@ -211,6 +258,15 @@ impl MixedEditor {
                     self.failed.insert(key.clone(), msg);
                 }
             }
+        }
+
+        if inserts > 0 {
+            log::debug!(
+                "renders cache: {} entries, {:.1} MB ({} new this frame)",
+                self.renders.len(),
+                self.renders_bytes() as f64 / (1024.0 * 1024.0),
+                inserts,
+            );
         }
 
         if any_pending {
@@ -232,6 +288,7 @@ impl MixedEditor {
         if self.segments.is_empty() {
             self.segments.push(String::new());
         }
+        self.cache_dirty = true;
 
         self.editing_index =
             prior_text.and_then(|t| self.segments.iter().position(|s| s == &t));
@@ -247,6 +304,7 @@ impl MixedEditor {
         self.editing_index = state.new_editing;
         if state.any_changed {
             self.dirty = true;
+            self.cache_dirty = true;
         }
         if state.any_lost_focus {
             self.re_parse();

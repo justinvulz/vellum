@@ -64,7 +64,10 @@ impl TypstEngine {
         let mut fonts = Vec::new();
         let mut bundled = 0usize;
         for data in typst_assets::fonts() {
-            let bytes = Bytes::new(data.to_vec());
+            // `data` is `&'static [u8]` baked into the binary by
+            // `typst-assets`; wrapping it directly avoids a heap copy
+            // of every bundled face (LinLibertine + NewCM* — ~30 MB).
+            let bytes = Bytes::new(data);
             let mut i = 0;
             while let Some(font) = Font::new(bytes.clone(), i) {
                 fonts.push(font);
@@ -72,21 +75,74 @@ impl TypstEngine {
                 i += 1;
             }
         }
+        // Only load system faces whose family the user actually
+        // configured (sans / CJK) plus a small monospace fallback list
+        // for code in rendered Typst. Loading every system face used to
+        // resident hundreds of MB of font data the renderer never
+        // touched.
+        let cfg = crate::config::current();
+        const MONO_FALLBACKS: &[&str] = &[
+            "DejaVu Sans Mono",
+            "Liberation Mono",
+            "JetBrains Mono",
+            "Fira Code",
+            "Hack",
+            "Cascadia Code",
+            "Source Code Pro",
+            "Menlo",
+            "Consolas",
+            "Noto Sans Mono",
+        ];
+        let allowed: std::collections::HashSet<String> = cfg
+            .sans_families
+            .iter()
+            .map(String::as_str)
+            .chain(cfg.cjk_families.iter().map(String::as_str))
+            .chain(MONO_FALLBACKS.iter().copied())
+            .map(str::to_ascii_lowercase)
+            .collect();
+
+        // fontdb iterates one entry per face. Many font files (especially
+        // .ttc / .otc collections like NotoSansCJK) contain 4-20+ faces,
+        // so reading the whole file per face used to load the same bytes
+        // dozens of times. Dedupe by path so each file is read once and
+        // all its faces from `allowed` families share refcounted `Bytes`.
+        let mut file_bytes: HashMap<PathBuf, Bytes> = HashMap::new();
+        let mut skipped = 0usize;
         for face in db.faces() {
-            if let fontdb::Source::File(path) = &face.source {
-                if let Ok(data) = std::fs::read(path) {
-                    let bytes = Bytes::new(data);
-                    if let Some(font) = Font::new(bytes, face.index) {
-                        fonts.push(font);
-                    }
+            let in_allowed = face
+                .families
+                .iter()
+                .any(|(name, _)| allowed.contains(&name.to_ascii_lowercase()));
+            if !in_allowed {
+                skipped += 1;
+                continue;
+            }
+            let fontdb::Source::File(path) = &face.source else {
+                continue;
+            };
+            let bytes = match file_bytes.get(path) {
+                Some(b) => b.clone(),
+                None => {
+                    let Ok(data) = std::fs::read(path) else { continue };
+                    let b = Bytes::new(data);
+                    file_bytes.insert(path.clone(), b.clone());
+                    b
                 }
+            };
+            if let Some(font) = Font::new(bytes, face.index) {
+                fonts.push(font);
             }
         }
+        let system_bytes: usize = file_bytes.values().map(|b| b.len()).sum();
         log::info!(
-            "typst engine: {} fonts ({} bundled + {} system), root {}",
+            "typst engine: {} fonts ({} bundled + {} system from {} files = {:.1} MB, {} faces filtered out), root {}",
             fonts.len(),
             bundled,
             fonts.len() - bundled,
+            file_bytes.len(),
+            system_bytes as f64 / (1024.0 * 1024.0),
+            skipped,
             root.display()
         );
 
