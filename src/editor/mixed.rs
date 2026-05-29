@@ -7,7 +7,7 @@ use super::preamble;
 use super::segment;
 use super::typst_engine::{RenderedPage, TypstEngine, PIXEL_PER_PT};
 use crate::style::{self, EditorConfig, content_width_pt};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Vertical gap between adjacent segments, in egui points.
 const SEGMENT_GAP: f32 = 6.0;
@@ -121,6 +121,7 @@ impl MixedEditor {
         }
 
         let effective = self.effective_sources();
+        self.evict_stale(&effective);
         self.ensure_rendered(ctx, engine, &effective);
         let pending = self.pending_focus.take();
 
@@ -162,6 +163,17 @@ impl MixedEditor {
                 preamble::wrap_for_render(&composed)
             })
             .collect()
+    }
+
+    /// Drop cached renders whose key no longer matches any live segment.
+    /// Cache keys are content-addressed on the fully wrapped source, so
+    /// editing a segment produces a fresh key — without this sweep the
+    /// stale textures (and their wgpu allocations) would accumulate for
+    /// the lifetime of the session.
+    fn evict_stale(&mut self, effective: &[String]) {
+        let live: HashSet<&str> = effective.iter().map(String::as_str).collect();
+        self.renders.retain(|k, _| live.contains(k.as_str()));
+        self.failed.retain(|k, _| live.contains(k.as_str()));
     }
 
     fn ensure_rendered(
