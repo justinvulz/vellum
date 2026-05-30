@@ -6,6 +6,7 @@
 //! place that turns intent into state changes.
 
 use crate::editor::mixed::MixedEditor;
+use crate::editor::render_cache::RenderCache;
 use crate::editor::typst_engine::TypstEngine;
 use crate::file_watcher::FileWatcher;
 use crate::search::{self, BacklinkIndex};
@@ -55,6 +56,7 @@ pub struct App {
     pub selected: Option<PathBuf>,
     pub mixed: MixedEditor,
     pub engine: TypstEngine,
+    pub render_cache: RenderCache,
     pub new_note_name: String,
     pub new_folder_name: String,
     pub search_query: String,
@@ -77,6 +79,7 @@ impl App {
             selected: None,
             mixed: MixedEditor::new(),
             engine,
+            render_cache: RenderCache::default(),
             new_note_name: String::new(),
             new_folder_name: String::new(),
             search_query: String::new(),

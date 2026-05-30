@@ -39,8 +39,13 @@ pub fn show(app: &mut App, ctx: &egui::Context, ui: &mut egui::Ui) -> Option<App
     });
     style::soft_separator(ui);
 
-    let App { mixed, engine, .. } = app;
-    if let Some(target) = mixed.show(ctx, ui, engine) {
+    let App {
+        mixed,
+        engine,
+        render_cache,
+        ..
+    } = app;
+    if let Some(target) = mixed.show(ctx, ui, engine, render_cache) {
         action = Some(AppAction::OpenNoteByName(target));
     }
 

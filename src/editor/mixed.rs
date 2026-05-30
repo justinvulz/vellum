@@ -4,10 +4,10 @@
 
 use super::highlight;
 use super::preamble;
+use super::render_cache::RenderCache;
 use super::segment;
 use super::typst_engine::{RenderedPage, TypstEngine, PIXEL_PER_PT};
 use crate::style::{self, EditorConfig, content_width_pt};
-use std::collections::{HashMap, HashSet};
 
 /// Vertical gap between adjacent segments, in egui points.
 const SEGMENT_GAP: f32 = 6.0;
@@ -31,8 +31,6 @@ const EDIT_FONT_SCALE: f32 = 0.8;
 pub struct MixedEditor {
     pub segments: Vec<String>,
     pub editing_index: Option<usize>,
-    pub renders: HashMap<String, RenderedPage>,
-    pub failed: HashMap<String, String>,
     pub dirty: bool,
     /// Tunables for the source `TextEdit` shown in edit mode —
     /// font, line height, syntax colours. Mutate to retheme.
@@ -85,8 +83,6 @@ impl MixedEditor {
         Self {
             segments: Vec::new(),
             editing_index: None,
-            renders: HashMap::new(),
-            failed: HashMap::new(),
             dirty: false,
             config: EditorConfig::default(),
             pending_focus: None,
@@ -110,8 +106,9 @@ impl MixedEditor {
             source.len(),
             self.segments.len()
         );
-        // Keep render/failed caches: keys are content-addressed, so
-        // unchanged segments keep their textures across reloads.
+        // The render cache lives on `App` and is content-addressed, so
+        // a note switch just stops referencing the old keys — anything
+        // not reused stays cached until LRU eviction kicks in.
     }
 
     pub fn source(&self) -> String {
@@ -126,6 +123,7 @@ impl MixedEditor {
         ctx: &egui::Context,
         ui: &mut egui::Ui,
         engine: &TypstEngine,
+        cache: &mut RenderCache,
     ) -> Option<String> {
         if self.segments.is_empty() {
             self.segments.push(String::new());
@@ -139,8 +137,7 @@ impl MixedEditor {
         // `cache_dirty = true`, the next frame rebuilds it regardless
         // of these contents.
         let effective = std::mem::take(&mut self.cached_effective);
-        self.evict_stale(&effective);
-        self.ensure_rendered(ctx, engine, &effective);
+        self.ensure_rendered(ctx, engine, cache, &effective);
         let pending = self.pending_focus.take();
 
         let mut state = FrameState {
@@ -153,7 +150,7 @@ impl MixedEditor {
             ui.add_space(TOP_PADDING);
             for i in 0..self.segments.len() {
                 if let Some(target) =
-                    self.show_segment(ui, i, &effective[i], pending, &mut state)
+                    self.show_segment(ui, i, &effective[i], pending, cache, &mut state)
                 {
                     nav = Some(target);
                 }
@@ -186,45 +183,11 @@ impl MixedEditor {
         self.cache_dirty = false;
     }
 
-    /// Drop cached renders whose key no longer matches any live segment.
-    /// Cache keys are content-addressed on the fully wrapped source, so
-    /// editing a segment produces a fresh key — without this sweep the
-    /// stale textures (and their wgpu allocations) would accumulate for
-    /// the lifetime of the session.
-    fn evict_stale(&mut self, effective: &[String]) {
-        let live: HashSet<&str> = effective.iter().map(String::as_str).collect();
-        let before = self.renders.len();
-        self.renders.retain(|k, _| live.contains(k.as_str()));
-        self.failed.retain(|k, _| live.contains(k.as_str()));
-        let after = self.renders.len();
-        if before != after {
-            log::debug!(
-                "renders cache: {} entries, {:.1} MB ({} evicted)",
-                after,
-                self.renders_bytes() as f64 / (1024.0 * 1024.0),
-                before - after,
-            );
-        }
-    }
-
-    /// CPU-side bytes held by every cached `RenderedPage` texture
-    /// (width × height × 4 RGBA bytes). egui keeps the image in the
-    /// `TextureHandle` for re-upload on context loss, so this is the
-    /// per-process heap cost; the GPU holds an equivalent copy.
-    fn renders_bytes(&self) -> usize {
-        self.renders
-            .values()
-            .map(|p| {
-                let [w, h] = p.texture.size();
-                w * h * 4
-            })
-            .sum()
-    }
-
     fn ensure_rendered(
         &mut self,
         ctx: &egui::Context,
         engine: &TypstEngine,
+        cache: &mut RenderCache,
         effective: &[String],
     ) {
         // Compile segments within a per-frame time budget so the UI stays
@@ -237,7 +200,7 @@ impl MixedEditor {
         let mut inserts = 0usize;
 
         for key in effective {
-            if self.renders.contains_key(key) || self.failed.contains_key(key) {
+            if cache.contains(key) {
                 continue;
             }
             if std::time::Instant::now() >= deadline {
@@ -246,7 +209,7 @@ impl MixedEditor {
             }
             match engine.render(ctx, key) {
                 Ok(tex) => {
-                    self.renders.insert(key.clone(), tex);
+                    cache.insert(key.clone(), tex);
                     inserts += 1;
                 }
                 Err(e) => {
@@ -255,16 +218,16 @@ impl MixedEditor {
                         "typst compile error: {}",
                         msg.lines().next().unwrap_or(&msg)
                     );
-                    self.failed.insert(key.clone(), msg);
+                    cache.insert_failed(key.clone(), msg);
                 }
             }
         }
 
         if inserts > 0 {
             log::debug!(
-                "renders cache: {} entries, {:.1} MB ({} new this frame)",
-                self.renders.len(),
-                self.renders_bytes() as f64 / (1024.0 * 1024.0),
+                "render cache: {} entries, {:.1} MB ({} new this frame)",
+                cache.len(),
+                cache.bytes_in_use() as f64 / (1024.0 * 1024.0),
                 inserts,
             );
         }
@@ -321,6 +284,7 @@ impl MixedEditor {
         i: usize,
         effective_key: &str,
         pending: Option<egui::Id>,
+        cache: &mut RenderCache,
         state: &mut FrameState,
     ) -> Option<String> {
         let seg_id = egui::Id::new(("mixed-segment", i));
@@ -346,12 +310,12 @@ impl MixedEditor {
                 resp.request_focus();
             }
             style::paint_edit_outline(ui.painter(), resp.rect);
-        } else if let Some(err) = self.failed.get(effective_key).cloned() {
+        } else if let Some(err) = cache.get_failed(effective_key) {
             if show_compile_error(ui, &self.segments[i], &err) {
                 state.new_editing = Some(i);
                 state.next_focus = Some(seg_id);
             }
-        } else if let Some(page) = self.renders.get(effective_key).cloned() {
+        } else if let Some(page) = cache.get(effective_key) {
             match show_rendered(ui, &page) {
                 SegmentClick::Edit => {
                     state.new_editing = Some(i);
