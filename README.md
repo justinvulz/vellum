@@ -26,7 +26,7 @@ Add Vellum to your NixOS flake configuration:
 
 **`flake.nix`**
 ```nix
-inputs.vellum.url = "github:justinvulz/vellum/latest";
+inputs.vellum.url = "github:justinvulz/vellum";
 ```
 
 **`configuration.nix`** (or any NixOS module)
@@ -41,7 +41,7 @@ inputs.vellum.url = "github:justinvulz/vellum/latest";
 
 **`flake.nix`**
 ```nix
-inputs.vellum.url = "github:justinvulz/vellum/latest";
+inputs.vellum.url = "github:justinvulz/vellum";
 ```
 
 **`home.nix`** (or any Home Manager module)
@@ -97,7 +97,7 @@ No pre-built Windows binaries are published — build from source with `cargo bu
 ### Try without installing
 
 ```sh
-nix run github:justinvulz/vellum/latest
+nix run github:justinvulz/vellum
 ```
 
 ### From source (Nix dev shell)
